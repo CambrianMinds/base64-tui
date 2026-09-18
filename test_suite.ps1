@@ -1,7 +1,11 @@
-# Automated Comprehensive Test Suite for base64-tui.ps1 v5.0
+# Automated Comprehensive Test Suite for base64-tui.ps1 v5.2
 $ErrorActionPreference = "Stop"
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
 
-Write-Host ">>> Commencing CambrianSystems Workstation v5.0 Engine Tests..." -ForegroundColor Cyan
+Write-Host ">>> Commencing CambrianSystems Workstation v5.2 Engine Tests..." -ForegroundColor Cyan
 
 # Source functions without running the main interactive loop
 $content = [System.IO.File]::ReadAllText("d:\tools\base64-tui\base64-tui.ps1", [System.Text.Encoding]::UTF8)
@@ -121,6 +125,95 @@ if ($asciiOk) {
     Write-Host "[FAIL] Phosphor scan failed" -ForegroundColor Red; exit 1
 }
 
+# Test 10: Image Transcoding (PNG to JPEG + Resizing)
+Write-Host "Test 10: Image Transcoding (PNG -> JPEG 32x32)... " -NoNewline
+$jpgBytes = Convert-ImageBytes -inputBytes $imgB -targetFormat "JPG" -targetWidth 32 -targetHeight 32 -jpegQuality 85
+if ($jpgBytes.Length -gt 0 -and $jpgBytes[0] -eq 0xFF -and $jpgBytes[1] -eq 0xD8) {
+    Write-Host "[PASS] ($($imgB.Length)B PNG -> $($jpgBytes.Length)B JPEG)" -ForegroundColor Green
+} else {
+    Write-Host "[FAIL] JPEG transcoding failed" -ForegroundColor Red; exit 1
+}
+
+# Test 11: Windows ICO Container Generation
+Write-Host "Test 11: Windows ICO Container Generation (16x16)... " -NoNewline
+$icoBytes = Convert-ImageBytes -inputBytes $imgB -targetFormat "ICO" -targetWidth 16 -targetHeight 16
+if ($icoBytes.Length -gt 22 -and $icoBytes[0] -eq 0x00 -and $icoBytes[1] -eq 0x00 -and $icoBytes[2] -eq 0x01 -and $icoBytes[3] -eq 0x00) {
+    Write-Host "[PASS] ($($icoBytes.Length) bytes ICO generated)" -ForegroundColor Green
+} else {
+    Write-Host "[FAIL] ICO generation failed" -ForegroundColor Red; exit 1
+}
+
+# Test 12: PDF Telemetry & Page Inspection
+Write-Host "Test 12: PDF Telemetry & Page Counter... " -NoNewline
+$mockPdf = [System.Text.Encoding]::ASCII.GetBytes("%PDF-1.7`r`n1 0 obj`r`n<< /Type /Catalog /Pages 2 0 R >>`r`nendobj`r`n2 0 obj`r`n<< /Type /Pages /Count 5 >>`r`nendobj`r`n%%EOF")
+$pdfInfo = Parse-PdfTelemetry $mockPdf
+if ($pdfInfo.Valid -and $pdfInfo.Version -eq "1.7" -and $pdfInfo.PageCount -eq 5) {
+    Write-Host "[PASS] (PDF v$($pdfInfo.Version), $($pdfInfo.PageCount) pages)" -ForegroundColor Green
+} else {
+    Write-Host "[FAIL] PDF telemetry inspection failed" -ForegroundColor Red; exit 1
+}
+
+# Test 13: Markdown Asset Packager (Inline Data URIs) & Unpack
+Write-Host "Test 13: Markdown Asset Packager & Unpacker Roundtrip... " -NoNewline
+$mdTest = "d:\tools\base64-tui\test_suite_temp.md"
+$imgTest = "d:\tools\base64-tui\test_suite_asset.png"
+[System.IO.File]::WriteAllBytes($imgTest, $imgB)
+[System.IO.File]::WriteAllText($mdTest, "# Test Document`n`n![Sample Asset](test_suite_asset.png)`n", [System.Text.Encoding]::UTF8)
+
+$packRes = Pack-MarkdownDocument -mdFilePath $mdTest
+$unpackRes = Unpack-MarkdownDocument -mdFilePath $packRes.TargetFile
+
+$packOk = ($packRes.ImagesInlined -eq 1 -and (Test-Path $packRes.TargetFile))
+$unpackOk = ($unpackRes.ImagesExtracted -eq 1 -and (Test-Path $unpackRes.TargetFile))
+
+Remove-Item $mdTest, $imgTest, $packRes.TargetFile, $unpackRes.TargetFile -ErrorAction SilentlyContinue
+if (Test-Path "d:\tools\base64-tui\assets") { Remove-Item "d:\tools\base64-tui\assets" -Recurse -Force -ErrorAction SilentlyContinue }
+
+if ($packOk -and $unpackOk) {
+    Write-Host "[PASS] (Inlined & Unpacked successfully)" -ForegroundColor Green
+} else {
+    Write-Host "[FAIL] Markdown packager failed" -ForegroundColor Red; exit 1
+}
+
+# Test 14: Terminal Phosphor QR Code Matrix
+Write-Host "Test 14: Terminal QR Code Matrix (MiniQr)... " -NoNewline
+$qrMatrix = [MiniQr]::Generate("CAMBRIANSYSTEMS")
+if ($qrMatrix.GetLength(0) -eq 25 -and $qrMatrix.GetLength(1) -eq 25) {
+    Write-Host "[PASS] (25x25 QR Matrix generated)" -ForegroundColor Green
+} else {
+    Write-Host "[FAIL] QR generation failed" -ForegroundColor Red; exit 1
+}
+
+# Test 15: Digital Steganography Carrier
+Write-Host "Test 15: Digital Steganography Carrier (Inject & Recover)... " -NoNewline
+$carrierFile = "d:\tools\base64-tui\carrier_suite.bin"
+$stegoFile = "d:\tools\base64-tui\stego_suite.bin"
+[System.IO.File]::WriteAllBytes($carrierFile, $imgB)
+$secretPayload = [System.Text.Encoding]::UTF8.GetBytes("CAMBRIAN_CLASSIFIED_STEGO_2026")
+
+$inj = Inject-StegoCarrier -carrierFilePath $carrierFile -payloadBytes $secretPayload -outputCarrierPath $stegoFile
+$ext = Extract-StegoCarrier -carrierFilePath $stegoFile
+$recovered = if ($ext.Found) { [System.Text.Encoding]::UTF8.GetString($ext.Bytes) } else { "" }
+
+Remove-Item $carrierFile, $stegoFile -ErrorAction SilentlyContinue
+
+if ($recovered -eq "CAMBRIAN_CLASSIFIED_STEGO_2026") {
+    Write-Host "[PASS] (Secret injected into $($inj.TotalSize)B carrier & recovered)" -ForegroundColor Green
+} else {
+    Write-Host "[FAIL] Stego secret recovery failed" -ForegroundColor Red; exit 1
+}
+
+# Test 16: Cryptographic Multi-Hash Grid
+Write-Host "Test 16: Cryptographic Multi-Hash Grid... " -NoNewline
+$testPayload = [System.Text.Encoding]::UTF8.GetBytes("CAMBRIANSYSTEMS_TEST_HASH")
+$multiHashes = Get-MultiHashTelemetry $testPayload
+$expectedSha256 = -join ([System.Security.Cryptography.SHA256]::Create().ComputeHash($testPayload) | ForEach-Object { "{0:x2}" -f $_ })
+if ($multiHashes.SHA256 -eq $expectedSha256 -and $multiHashes.MD5.Length -eq 32 -and $multiHashes.SHA512.Length -eq 128) {
+    Write-Host "[PASS] (MD5, SHA1, SHA256, SHA384, SHA512 computed)" -ForegroundColor Green
+} else {
+    Write-Host "[FAIL] Multi-hash computation failed" -ForegroundColor Red; exit 1
+}
+
 Write-Host "`n========================================================" -ForegroundColor Cyan
-Write-Host ">>> ALL 9 WORKSTATION ENGINE TESTS PASSED WITH 100% PASS RATE! <<<" -ForegroundColor Green
+Write-Host ">>> ALL 16 WORKSTATION ENGINE TESTS PASSED WITH 100% PASS RATE! <<<" -ForegroundColor Green
 Write-Host "========================================================" -ForegroundColor Cyan

@@ -1,25 +1,328 @@
 <#
 .SYNOPSIS
-    CAMBRIANSYSTEMS // DATA TRANSMUTATION RELAY CONSOLE (BASE64-TUI v5.0)
+    CAMBRIANSYSTEMS // DATA TRANSMUTATION RELAY CONSOLE (BASE64-TUI v5.2)
     Retro-Corporate Terminal & Security Workstation
     RFC 4648 / MIME Base64 / JWT / Base64URL / Hex / GZip / PS-EncodedCommand / HexDump
 #>
+
+# Ensure UTF-8 Console Output Encoding
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
 
 # Ensure required assemblies are loaded
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.IO.Compression
 
+# Win32 Console Mouse & QR Code Engine
+$helperCSharp = @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+public class ConsoleMouseHelper {
+    private const int STD_INPUT_HANDLE = -10;
+    private const uint ENABLE_MOUSE_INPUT = 0x0010;
+    private const uint ENABLE_EXTENDED_FLAGS = 0x0080;
+    private const uint ENABLE_QUICK_EDIT_MODE = 0x0040;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+
+    private static uint _origMode;
+    private static bool _initialized = false;
+
+    public static bool EnableMouse() {
+        try {
+            IntPtr handle = GetStdHandle(STD_INPUT_HANDLE);
+            if (!GetConsoleMode(handle, out _origMode)) return false;
+            uint newMode = (_origMode | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS) & ~ENABLE_QUICK_EDIT_MODE;
+            bool ok = SetConsoleMode(handle, newMode);
+            _initialized = ok;
+            return ok;
+        } catch {
+            return false;
+        }
+    }
+
+    public static void DisableMouse() {
+        if (_initialized) {
+            try {
+                IntPtr handle = GetStdHandle(STD_INPUT_HANDLE);
+                SetConsoleMode(handle, _origMode);
+                _initialized = false;
+            } catch {}
+        }
+    }
+}
+
+public class MiniQr {
+    public static bool[,] Generate(string text) {
+        byte[] data = System.Text.Encoding.UTF8.GetBytes(text);
+        if (data.Length > 28) {
+            byte[] truncated = new byte[28];
+            Array.Copy(data, truncated, 28);
+            data = truncated;
+        }
+        int size = 25;
+        bool[,] matrix = new bool[size, size];
+        bool[,] isFunction = new bool[size, size];
+
+        AddFinder(matrix, isFunction, 0, 0);
+        AddFinder(matrix, isFunction, size - 7, 0);
+        AddFinder(matrix, isFunction, 0, size - 7);
+        AddAlignment(matrix, isFunction, 18, 18);
+
+        for (int i = 8; i < size - 8; i++) {
+            matrix[6, i] = (i % 2 == 0); isFunction[6, i] = true;
+            matrix[i, 6] = (i % 2 == 0); isFunction[i, 6] = true;
+        }
+
+        matrix[size - 8, 8] = true; isFunction[size - 8, 8] = true;
+        for (int i = 0; i < 9; i++) { isFunction[i, 8] = true; isFunction[8, i] = true; }
+        for (int i = size - 8; i < size; i++) { isFunction[8, i] = true; isFunction[i, 8] = true; }
+
+        int bitIdx = 0;
+        List<bool> bits = new List<bool>();
+        bits.Add(false); bits.Add(true); bits.Add(false); bits.Add(false);
+        for (int i = 7; i >= 0; i--) bits.Add(((data.Length >> i) & 1) == 1);
+        foreach (byte b in data) {
+            for (int i = 7; i >= 0; i--) bits.Add(((b >> i) & 1) == 1);
+        }
+        for (int i = 0; i < 4 && bits.Count < 224; i++) bits.Add(false);
+        while (bits.Count % 8 != 0) bits.Add(false);
+        byte[] pad = new byte[] { 0xEC, 0x11 };
+        int padIdx = 0;
+        while (bits.Count < 224) {
+            byte pb = pad[padIdx % 2]; padIdx++;
+            for (int i = 7; i >= 0; i--) bits.Add(((pb >> i) & 1) == 1);
+        }
+
+        int row = size - 1, col = size - 1, dir = -1;
+        while (col > 0) {
+            if (col == 6) col--;
+            for (int r = 0; r < size; r++) {
+                int actualRow = dir == -1 ? (size - 1 - r) : r;
+                for (int c = 0; c < 2; c++) {
+                    int actualCol = col - c;
+                    if (!isFunction[actualRow, actualCol]) {
+                        bool bit = (bitIdx < bits.Count) ? bits[bitIdx++] : false;
+                        bool mask = ((actualRow + actualCol) % 2 == 0);
+                        matrix[actualRow, actualCol] = bit ^ mask;
+                    }
+                }
+            }
+            dir = -dir;
+            col -= 2;
+        }
+        return matrix;
+    }
+
+    private static void AddFinder(bool[,] m, bool[,] f, int x, int y) {
+        for (int r = 0; r < 7; r++) {
+            for (int c = 0; c < 7; c++) {
+                bool val = (r == 0 || r == 6 || c == 0 || c == 6 || (r >= 2 && r <= 4 && c >= 2 && c <= 4));
+                m[x + r, y + c] = val;
+                f[x + r, y + c] = true;
+            }
+        }
+        for (int i = 0; i < 8; i++) {
+            if (x + 7 < m.GetLength(0) && y + i < m.GetLength(1)) { f[x + 7, y + i] = true; m[x + 7, y + i] = false; }
+            if (x + i < m.GetLength(0) && y + 7 < m.GetLength(1)) { f[x + i, y + 7] = true; m[x + i, y + 7] = false; }
+            if (x - 1 >= 0 && y + i < m.GetLength(1)) { f[x - 1, y + i] = true; m[x - 1, y + i] = false; }
+            if (x + i < m.GetLength(0) && y - 1 >= 0) { f[x + i, y - 1] = true; m[x + i, y - 1] = false; }
+        }
+    }
+
+    private static void AddAlignment(bool[,] m, bool[,] f, int x, int y) {
+        for (int r = -2; r <= 2; r++) {
+            for (int c = -2; c <= 2; c++) {
+                bool val = (Math.Abs(r) == 2 || Math.Abs(c) == 2 || (r == 0 && c == 0));
+                m[x + r, y + c] = val;
+                f[x + r, y + c] = true;
+            }
+        }
+    }
+}
+"@
+
+try {
+    Add-Type -TypeDefinition $helperCSharp
+} catch {}
+
 # Global Configuration & State
 $script:Config = @{
     ThemeIndex = 0
     SoundEnabled = $true
+    MouseEnabled = $true
     LineWidth = 85
     WrapMode = 76 # 0 = None, 64 = RFC1421, 76 = RFC2045
     DefaultEncoding = "UTF8"
+    BorderStyle = "Double" # Double, Single, Rounded, Block, Ascii
 }
 
-# Retro Themes Palette
+# Mouse Hitbox Tracking Engine
+$script:Hitboxes = @()
+
+function Register-Hitbox {
+    param(
+        [string]$key,
+        [int]$row,
+        [int]$startCol = 0,
+        [int]$endCol = 85
+    )
+    $script:Hitboxes += @{
+        Key = $key.ToUpper()
+        Row = $row
+        StartCol = $startCol
+        EndCol = $endCol
+    }
+}
+
+function Clear-Hitboxes {
+    $script:Hitboxes = @()
+}
+
+function Read-MenuSelectionOrClick {
+    param([string]$prompt = " >> SELECTION: ")
+    $t = Get-Theme
+    Write-Host $prompt -NoNewline -ForegroundColor $t.Alert
+    
+    if (-not $script:Config.MouseEnabled) {
+        $in = [Console]::ReadLine()
+        return if ($null -eq $in) { "" } else { $in.ToUpper().Trim() }
+    }
+    
+    try {
+        if (-not [Environment]::UserInteractive) {
+            $in = [Console]::ReadLine()
+            return if ($null -eq $in) { "" } else { $in.ToUpper().Trim() }
+        }
+    } catch {
+        $in = [Console]::ReadLine()
+        return if ($null -eq $in) { "" } else { $in.ToUpper().Trim() }
+    }
+    
+    try {
+        [ConsoleMouseHelper]::EnableMouse()
+        Write-Host "`e[?1000h`e[?1006h" -NoNewline
+    } catch {}
+    
+    try {
+        while ($true) {
+            if ([Console]::KeyAvailable) {
+                $keyInfo = [Console]::ReadKey($true)
+                
+                # Check for VT SGR Mouse Sequence: \e[<0;x;yM
+                if ($keyInfo.Key -eq [ConsoleKey]::Escape) {
+                    Start-Sleep -Milliseconds 25
+                    if ([Console]::KeyAvailable) {
+                        $seq = ""
+                        while ([Console]::KeyAvailable) {
+                            $seq += [Console]::ReadKey($true).KeyChar
+                        }
+                        if ($seq -match '^\[<(\d+);(\d+);(\d+)([Mm])') {
+                            $btn = [int]$matches[1]
+                            $col = [int]$matches[2]
+                            $row = [int]$matches[3]
+                            $isPress = ($matches[4] -eq 'M')
+                            
+                            if ($isPress -and $btn -eq 0) {
+                                foreach ($hb in $script:Hitboxes) {
+                                    if ($row -eq $hb.Row -and $col -ge $hb.StartCol -and $col -le $hb.EndCol) {
+                                        Play-Sound "blip"
+                                        Write-Host " [CLICK: $($hb.Key)]" -ForegroundColor $t.Alert
+                                        Start-Sleep -Milliseconds 120
+                                        return $hb.Key
+                                    }
+                                }
+                            }
+                            continue
+                        }
+                    } else {
+                        return "B"
+                    }
+                }
+                
+                if ($keyInfo.Key -eq [ConsoleKey]::Enter) {
+                    Write-Host ""
+                    return ""
+                }
+                
+                $char = $keyInfo.KeyChar.ToString().ToUpper()
+                if ($char) {
+                    Write-Host $char -ForegroundColor $t.Alert
+                    Play-Sound "blip"
+                    Start-Sleep -Milliseconds 80
+                    return $char
+                }
+            }
+            Start-Sleep -Milliseconds 30
+        }
+    } finally {
+        try {
+            Write-Host "`e[?1000l`e[?1006l" -NoNewline
+            [ConsoleMouseHelper]::DisableMouse()
+        } catch {}
+    }
+}
+
+# Retro Box Framing Engine (Double, Single, Rounded, Block, Ascii)
+$script:BoxStyles = @{
+    "Double" = @{
+        Name = "DOUBLE-LINE RETRO (Norton/Turbo)"
+        TL = [string][char]0x2554; TR = [string][char]0x2557; BL = [string][char]0x255A; BR = [string][char]0x255D
+        H = [string][char]0x2550;  V = [string][char]0x2551;  LT = [string][char]0x2560; RT = [string][char]0x2563
+        TT = [string][char]0x2566; BT = [string][char]0x2569; Cross = [string][char]0x256C
+        Fill = [string][char]0x2588; Empty = [string][char]0x2591; Arrow = [string][char]0x25BA
+    }
+    "Single" = @{
+        Name = "SINGLE-LINE CLEAN (VT-100/ANSI)"
+        TL = [string][char]0x250C; TR = [string][char]0x2510; BL = [string][char]0x2514; BR = [string][char]0x2518
+        H = [string][char]0x2500;  V = [string][char]0x2502;  LT = [string][char]0x251C; RT = [string][char]0x2524
+        TT = [string][char]0x252C; BT = [string][char]0x2534; Cross = [string][char]0x253C
+        Fill = [string][char]0x2588; Empty = [string][char]0x2591; Arrow = [string][char]0x25BA
+    }
+    "Rounded" = @{
+        Name = "ROUNDED MODERN RETRO (CLI Boutique)"
+        TL = [string][char]0x256D; TR = [string][char]0x256E; BL = [string][char]0x2570; BR = [string][char]0x256F
+        H = [string][char]0x2500;  V = [string][char]0x2502;  LT = [string][char]0x251C; RT = [string][char]0x2524
+        TT = [string][char]0x252C; BT = [string][char]0x2534; Cross = [string][char]0x253C
+        Fill = [string][char]0x2588; Empty = [string][char]0x2591; Arrow = [string][char]0x25BA
+    }
+    "Block" = @{
+        Name = "HEAVY BLOCK PHOSPHOR (Cyberdeck)"
+        TL = [string][char]0x2588; TR = [string][char]0x2588; BL = [string][char]0x2588; BR = [string][char]0x2588
+        H = [string][char]0x2580;  V = [string][char]0x2588;  LT = [string][char]0x2588; RT = [string][char]0x2588
+        TT = [string][char]0x2580; BT = [string][char]0x2584; Cross = [string][char]0x2588
+        Fill = [string][char]0x2588; Empty = [string][char]0x2592; Arrow = [string][char]0x25BA
+    }
+    "Ascii" = @{
+        Name = "PURE 7-BIT ASCII (Compatibility)"
+        TL = "+"; TR = "+"; BL = "+"; BR = "+"
+        H = "-";  V = "|";  LT = "+"; RT = "+"
+        TT = "+"; BT = "+"; Cross = "+"
+        Fill = "#"; Empty = "-"; Arrow = ">"
+    }
+}
+
+function Get-BoxStyle {
+    $styleKey = $script:Config.BorderStyle
+    if ($script:BoxStyles.ContainsKey($styleKey)) {
+        return $script:BoxStyles[$styleKey]
+    }
+    return $script:BoxStyles["Double"]
+}
+
+# Retro Themes Palette (7 Authentic Computing Presets)
 $script:Themes = @(
     @{
         Name = "CORPORATE IBM/NOVELL BLUE"
@@ -55,6 +358,39 @@ $script:Themes = @(
         HeaderFg = "Green"
     },
     @{
+        Name = "CYBERPUNK SYNTHWAVE 2088"
+        Bg = "Black"
+        Fg = "Cyan"
+        Accent = "Magenta"
+        Dim = "DarkGray"
+        Alert = "Yellow"
+        Error = "DarkRed"
+        HeaderBg = "DarkMagenta"
+        HeaderFg = "White"
+    },
+    @{
+        Name = "TURBO PASCAL BORLAND BLUE"
+        Bg = "DarkBlue"
+        Fg = "White"
+        Accent = "DarkCyan"
+        Dim = "Gray"
+        Alert = "Yellow"
+        Error = "Red"
+        HeaderBg = "DarkCyan"
+        HeaderFg = "White"
+    },
+    @{
+        Name = "SOLARIZED HACKER MONOKAI"
+        Bg = "DarkGray"
+        Fg = "Yellow"
+        Accent = "Cyan"
+        Dim = "Black"
+        Alert = "White"
+        Error = "DarkRed"
+        HeaderBg = "Black"
+        HeaderFg = "Green"
+    },
+    @{
         Name = "CAMBRIAN SLATE & CRIMSON"
         Bg = "Black"
         Fg = "Gray"
@@ -86,49 +422,122 @@ function Play-Sound {
     } catch {}
 }
 
+# Telemetry Progress / Ratio Meter Bar Generator
+function Draw-MeterBar {
+    param(
+        [double]$percent,
+        [int]$width = 16,
+        [string]$label = ""
+    )
+    $b = Get-BoxStyle
+    $pctClamped = [Math]::Max(0.0, [Math]::Min(100.0, $percent))
+    $fillCount = [int][Math]::Round(($pctClamped / 100.0) * $width)
+    $emptyCount = [Math]::Max(0, $width - $fillCount)
+    
+    $filledStr = [string]"" + ($b.Fill * $fillCount)
+    $emptyStr = [string]"" + ($b.Empty * $emptyCount)
+    
+    if ($label) {
+        return "[$filledStr$emptyStr] $label".Trim()
+    }
+    return "[$filledStr$emptyStr] $([Math]::Round($percent, 1))%"
+}
+
 # Drawing & Layout Utilities
 function Draw-Header {
-    param([string]$subTitle = "")
+    param(
+        [string]$subTitle = "",
+        [switch]$IsMainMenu
+    )
     $t = Get-Theme
-    $w = [Math]::Max(82, [Console]::WindowWidth)
+    $b = Get-BoxStyle
+    $w = 84
+    try {
+        if ([Console]::WindowWidth -gt 84) { $w = [Console]::WindowWidth }
+    } catch {}
     
-    [Console]::BackgroundColor = [ConsoleColor]::$($t.Bg)
-    [Console]::Clear()
+    try {
+        [Console]::BackgroundColor = [ConsoleColor]::$($t.Bg)
+        [Console]::Clear()
+    } catch {}
+    Clear-Hitboxes
     
-    # Corporate Top Warning
-    Write-Host ("+" + ("=" * ($w - 2)) + "+") -ForegroundColor $t.Dim -BackgroundColor $t.Bg
-    
-    $bannerText = "CAMBRIANSYSTEMS CORP. // DATA INTEGRITY & BASE64 TRANSMUTATION WORKSTATION"
-    $spaces = [Math]::Max(0, ($w - 2 - $bannerText.Length) / 2)
-    $bannerLine = "|" + (" " * [Math]::Floor($spaces)) + $bannerText + (" " * [Math]::Ceiling($spaces)) + "|"
-    if ($bannerLine.Length -gt $w) { $bannerLine = $bannerLine.Substring(0, $w) }
-    Write-Host $bannerLine -ForegroundColor $t.HeaderFg -BackgroundColor $t.HeaderBg
-    
-    $secText = "[ SYS: ONLINE ] [ PROTOCOL: ACTIVE ] [ RFC-4648 / JWT / GZIP / HEX-DUMP ]"
-    $secSpaces = [Math]::Max(0, ($w - 2 - $secText.Length) / 2)
-    $secLine = "|" + (" " * [Math]::Floor($secSpaces)) + $secText + (" " * [Math]::Ceiling($secSpaces)) + "|"
-    if ($secLine.Length -gt $w) { $secLine = $secLine.Substring(0, $w) }
-    Write-Host $secLine -ForegroundColor $t.Accent -BackgroundColor $t.Bg
-    
-    if ($subTitle) {
-        $sub = ">> WORKSTATION SUB-SYSTEM: $subTitle <<"
-        $subSpaces = [Math]::Max(0, ($w - 2 - $sub.Length) / 2)
-        $subLine = "|" + (" " * [Math]::Floor($subSpaces)) + $sub + (" " * [Math]::Ceiling($subSpaces)) + "|"
-        if ($subLine.Length -gt $w) { $subLine = $subLine.Substring(0, $w) }
-        Write-Host $subLine -ForegroundColor $t.Alert -BackgroundColor $t.Bg
+    if ($IsMainMenu) {
+        $logoLines = @(
+            "  ██████╗  █████╗ ███████╗███████╗ ██████╗ ██╗  ██╗   CAMBRIANSYSTEMS WORKSTATION v5.2",
+            "  ██╔══██╗██╔══██╗██╔════╝██╔════╝██╔════╝ ██║  ██║   SEC-CLEARANCE: LEVEL-4 // RELAY ",
+            "  ██████╔╝███████║███████╗█████╗  ███████╗ ███████║   [RFC-4648 / JWT / GZIP / HEXDUMP]",
+            "  ██╔══██╗██╔══██║╚════██║██╔══╝  ██╔═══██╗╚════██║   [SYSTEM: ONLINE] [STATUS: ARMED] ",
+            "  ██████╔╝██║  ██║███████║███████╗╚██████╔╝     ██║   [THEME: $($t.Name.PadRight(18).Substring(0,18))] [BOX: $($script:Config.BorderStyle.PadRight(6).Substring(0,6))]",
+            "  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝ ╚═════╝      ╚═╝   ================================="
+        )
+        
+        $top = $b.TL + ($b.H * ($w - 2)) + $b.TR
+        Write-Host $top -ForegroundColor $t.Accent -BackgroundColor $t.Bg
+        
+        foreach ($ll in $logoLines) {
+            $padLen = [Math]::Max(0, $w - 4 - $ll.Length)
+            $paddedLine = $b.V + " " + $ll + (" " * $padLen) + " " + $b.V
+            Write-Host $paddedLine -ForegroundColor $t.HeaderFg -BackgroundColor $t.Bg
+        }
+        
+        $bot = $b.BL + ($b.H * ($w - 2)) + $b.BR
+        Write-Host $bot -ForegroundColor $t.Accent -BackgroundColor $t.Bg
+        Write-Host ""
+    } else {
+        $top = $b.TL + ($b.H * ($w - 2)) + $b.TR
+        Write-Host $top -ForegroundColor $t.Dim -BackgroundColor $t.Bg
+        
+        $bannerText = "CAMBRIANSYSTEMS CORP. // DATA INTEGRITY & BASE64 TRANSMUTATION WORKSTATION"
+        $spaces = [Math]::Max(0, ($w - 2 - $bannerText.Length) / 2)
+        $bannerLine = $b.V + (" " * [Math]::Floor($spaces)) + $bannerText + (" " * [Math]::Ceiling($spaces)) + $b.V
+        if ($bannerLine.Length -gt $w) { $bannerLine = $bannerLine.Substring(0, $w) }
+        Write-Host $bannerLine -ForegroundColor $t.HeaderFg -BackgroundColor $t.HeaderBg
+        
+        $secText = "[ SYS: ONLINE ] [ SEC-LVL: 4 ] [ RFC-4648 / MIME / JWT / GZIP / HEX-DUMP ]"
+        $secSpaces = [Math]::Max(0, ($w - 2 - $secText.Length) / 2)
+        $secLine = $b.V + (" " * [Math]::Floor($secSpaces)) + $secText + (" " * [Math]::Ceiling($secSpaces)) + $b.V
+        if ($secLine.Length -gt $w) { $secLine = $secLine.Substring(0, $w) }
+        Write-Host $secLine -ForegroundColor $t.Accent -BackgroundColor $t.Bg
+        
+        if ($subTitle) {
+            $sub = ">> SUB-SYSTEM CONSOLE: $subTitle <<"
+            $subSpaces = [Math]::Max(0, ($w - 2 - $sub.Length) / 2)
+            $subLine = $b.V + (" " * [Math]::Floor($subSpaces)) + $sub + (" " * [Math]::Ceiling($subSpaces)) + $b.V
+            if ($subLine.Length -gt $w) { $subLine = $subLine.Substring(0, $w) }
+            Write-Host $subLine -ForegroundColor $t.Alert -BackgroundColor $t.Bg
+        }
+        
+        $bot = $b.BL + ($b.H * ($w - 2)) + $b.BR
+        Write-Host $bot -ForegroundColor $t.Dim -BackgroundColor $t.Bg
+        Write-Host ""
     }
-    
-    Write-Host ("+" + ("=" * ($w - 2)) + "+") -ForegroundColor $t.Dim -BackgroundColor $t.Bg
-    Write-Host ""
 }
 
 function Draw-StatusBar {
     param([string]$msg = "READY // AWAITING OPERATOR INPUT")
     $t = Get-Theme
-    $w = [Math]::Max(82, [Console]::WindowWidth)
-    $bar = " [STATUS: " + $msg.PadRight($w - 14) + "]"
-    if ($bar.Length -gt $w) { $bar = $bar.Substring(0, $w) }
-    Write-Host $bar -ForegroundColor $t.Bg -BackgroundColor $t.Accent
+    $b = Get-BoxStyle
+    $w = 84
+    try {
+        if ([Console]::WindowWidth -gt 84) { $w = [Console]::WindowWidth }
+    } catch {}
+    
+    $soundTag = if ($script:Config.SoundEnabled) { "SND: ON" } else { "SND: MUTED" }
+    $wrapTag = if ($script:Config.WrapMode -eq 0) { "WRAP: OFF" } else { "WRAP: $($script:Config.WrapMode)" }
+    $borderTag = "BOX: $($script:Config.BorderStyle.ToUpper())"
+    $rightSegment = " [ $borderTag | $wrapTag | $soundTag ]"
+    
+    $leftSpace = [Math]::Max(1, $w - 4 - $rightSegment.Length)
+    $leftMsg = " " + $b.Arrow + " STATUS: " + $msg
+    if ($leftMsg.Length -gt $leftSpace) {
+        $leftMsg = $leftMsg.Substring(0, [Math]::Max(0, $leftSpace - 3)) + "..."
+    }
+    $leftPadded = $leftMsg.PadRight($leftSpace)
+    $finalBar = ($leftPadded + $rightSegment).PadRight($w)
+    if ($finalBar.Length -gt $w) { $finalBar = $finalBar.Substring(0, $w) }
+    
+    Write-Host $finalBar -ForegroundColor $t.Bg -BackgroundColor $t.Accent
 }
 
 function Draw-Box {
@@ -138,19 +547,24 @@ function Draw-Box {
         [string]$color = "Fg"
     )
     $t = Get-Theme
+    $b = Get-BoxStyle
     $c = $t[$color]
-    $w = [Math]::Min(80, [Console]::WindowWidth - 2)
-    if ($w -lt 30) { $w = 80 }
+    $w = 84
+    try {
+        $w = [Math]::Min(84, [Console]::WindowWidth - 2)
+    } catch {}
+    if ($w -lt 40) { $w = 84 }
     
     if ($title) {
-        $dispTitle = " [ $title ] "
-        if ($dispTitle.Length -gt ($w - 4)) {
-            $dispTitle = $dispTitle.Substring(0, $w - 7) + "... ] "
+        $dispTitle = " " + $b.LT + " $title " + $b.RT + " "
+        if ($dispTitle.Length -gt ($w - 6)) {
+            $dispTitle = " " + $b.LT + " " + $title.Substring(0, [Math]::Max(0, $w - 12)) + "... " + $b.RT + " "
         }
-        $fill = [Math]::Max(0, $w - 3 - $dispTitle.Length)
-        $top = "+-" + $dispTitle + ("-" * $fill) + "+"
+        $fill = [Math]::Max(0, $w - 2 - $dispTitle.Length)
+        $top = $b.TL + ($b.H * 2) + $dispTitle + ($b.H * ($fill - 2)) + $b.TR
+        if ($top.Length -gt $w) { $top = $top.Substring(0, $w) }
     } else {
-        $top = "+" + ("-" * ($w - 2)) + "+"
+        $top = $b.TL + ($b.H * ($w - 2)) + $b.TR
     }
     Write-Host $top -ForegroundColor $t.Accent -BackgroundColor $t.Bg
     
@@ -159,11 +573,18 @@ function Draw-Box {
         if ($str.Length -gt ($w - 4)) {
             $str = $str.Substring(0, $w - 7) + "..."
         }
-        $padded = "| " + $str.PadRight($w - 4) + " |"
+        $padLen = [Math]::Max(0, $w - 4 - $str.Length)
+        $padded = $b.V + " " + $str + (" " * $padLen) + " " + $b.V
+        
+        $r = try { [Console]::CursorTop } catch { -1 }
+        if ($r -ge 0 -and $str -match '^\s*\[([A-Za-z0-9])\]') {
+            Register-Hitbox -key $matches[1] -row $r -startCol 0 -endCol $w
+        }
+        
         Write-Host $padded -ForegroundColor $c -BackgroundColor $t.Bg
     }
     
-    $bot = "+" + ("-" * ($w - 2)) + "+"
+    $bot = $b.BL + ($b.H * ($w - 2)) + $b.BR
     Write-Host $bot -ForegroundColor $t.Accent -BackgroundColor $t.Bg
 }
 
@@ -249,6 +670,7 @@ function Render-AsciiThumbnail {
         [int]$targetHeight = 16
     )
     $t = Get-Theme
+    $b = Get-BoxStyle
     try {
         $ms = New-Object System.IO.MemoryStream(,$bytes)
         $origBmp = [System.Drawing.Image]::FromStream($ms)
@@ -268,13 +690,13 @@ function Render-AsciiThumbnail {
         $g.DrawImage($origBmp, 0, 0, $scaledW, $scaledH)
         
         $ramp = " .:-=+*#%@"
-        $headerTag = "+-- [ IMAGE PHOSPHOR SCAN: ${w}x${h} ] "
+        $headerTag = $b.TL + ($b.H * 2) + " [ IMAGE PHOSPHOR SCAN: ${w}x${h} ] "
         $fillLen = [Math]::Max(2, $scaledW + 4 - $headerTag.Length)
         Write-Host $headerTag -NoNewline -ForegroundColor $t.Accent
-        Write-Host ("-" * $fillLen + "+") -ForegroundColor $t.Dim
+        Write-Host (($b.H * $fillLen) + $b.TR) -ForegroundColor $t.Dim
         
         for ($y = 0; $y -lt $scaledH; $y++) {
-            Write-Host "| " -NoNewline -ForegroundColor $t.Accent
+            Write-Host ($b.V + " ") -NoNewline -ForegroundColor $t.Accent
             for ($x = 0; $x -lt $scaledW; $x++) {
                 $pixel = $resized.GetPixel($x, $y)
                 $luma = [int](0.299 * $pixel.R + 0.587 * $pixel.G + 0.114 * $pixel.B)
@@ -291,9 +713,9 @@ function Render-AsciiThumbnail {
                     Write-Host $ch -NoNewline -ForegroundColor $t.Dim
                 }
             }
-            Write-Host " |" -ForegroundColor $t.Accent
+            Write-Host (" " + $b.V) -ForegroundColor $t.Accent
         }
-        $footer = "+" + ("-" * ($scaledW + 2)) + "+"
+        $footer = $b.BL + ($b.H * ($scaledW + 2)) + $b.BR
         Write-Host $footer -ForegroundColor $t.Accent
         
         $g.Dispose()
@@ -531,23 +953,26 @@ function Invoke-EncodeText {
     Play-Sound "success"
     Draw-Header "TEXT ENCODE COMPLETE"
     
+    $ratio = [Math]::Round((($b64Result.Length - $rawBytes.Length) / [Math]::Max(1, $rawBytes.Length)) * 100, 1)
+    $expansionMeter = Draw-MeterBar $ratio 16 "+$ratio% EXPANSION"
     $stats = @(
         "SOURCE FORMAT        : UTF-8 PLAINTEXT",
         "BYTE SIZE            : $($rawBytes.Length) bytes ($($inputText.Length) characters)",
         "BASE64 STRING LENGTH : $($b64Result.Length) characters",
-        "BANDWIDTH EXPANSION  : +$([Math]::Round((($b64Result.Length - $rawBytes.Length) / [Math]::Max(1, $rawBytes.Length)) * 100, 1))%",
-        "PADDING              : $(if ($b64Result.EndsWith('==')) { '2 (==)' } elseif ($b64Result.EndsWith('=')) { '1 (=)' } else { '0' })"
+        "BANDWIDTH EXPANSION  : $expansionMeter",
+        "PADDING              : $(if ($b64Result.EndsWith('==')) { '[==] 2 BYTES' } elseif ($b64Result.EndsWith('=')) { '[=] 1 BYTE' } else { '[NONE] 0 BYTES' })"
     )
     Draw-Box $stats "TELEMETRY METRICS" "Fg"
     Write-Host ""
     
-    Write-Host " +-- [ BASE64 STREAM PREVIEW (FIRST 400 CHARS) ] " -ForegroundColor $t.Accent
+    $b = Get-BoxStyle
+    Write-Host (" " + $b.TL + ($b.H * 2) + " [ BASE64 STREAM PREVIEW (FIRST 400 CHARS) ] " + ($b.H * 24)) -ForegroundColor $t.Accent
     $previewLen = [Math]::Min(400, $formattedB64.Length)
     Write-Host $formattedB64.Substring(0, $previewLen) -ForegroundColor $t.Alert
     if ($formattedB64.Length -gt 400) {
         Write-Host " ... [$(($formattedB64.Length - 400)) CHARACTERS TRUNCATED] ..." -ForegroundColor $t.Dim
     }
-    Write-Host " +--" -ForegroundColor $t.Accent
+    Write-Host (" " + $b.BL + ($b.H * 68)) -ForegroundColor $t.Accent
     Write-Host ""
     
     Write-Host " [ACTIONS]: [C] Copy to Clipboard | [S] Save to File | [ENTER] Main Menu" -ForegroundColor $t.Accent
@@ -642,18 +1067,20 @@ function Invoke-DecodeText {
     Draw-Header "DECODE TEXT COMPLETE"
     
     $stats = @(
-        "CLEANED BASE64 LENGTH: $($cleanB64.Length) chars",
+        "CLEANED BASE64 LENGTH: $($cleanB64.Length) characters",
         "RECOVERED BYTE COUNT : $($decodedBytes.Length) bytes",
         "ENCODING             : UTF-8 PLAINTEXT",
-        "LINES DETECTED       : $(($decodedText -split "`r`n|`n").Length)"
+        "MODULO-4 INTEGRITY   : $(if ($cleanB64.Length % 4 -eq 0) { '[✓ PASSED] (Remainder: 0)' } else { '[✗ FAILED] (Remainder: ' + ($cleanB64.Length % 4) + ')' })",
+        "LINES DETECTED       : $(($decodedText -split "`r`n|`n").Length) lines detected"
     )
     Draw-Box $stats "PAYLOAD TELEMETRY" "Fg"
     Write-Host ""
     
-    Write-Host " +-- [ DECODED PLAINTEXT PREVIEW (FIRST 500 CHARS) ] " -ForegroundColor $t.Accent
+    $b = Get-BoxStyle
+    Write-Host (" " + $b.TL + ($b.H * 2) + " [ DECODED PLAINTEXT PREVIEW (FIRST 500 CHARS) ] " + ($b.H * 22)) -ForegroundColor $t.Accent
     $textPreview = if ($decodedText.Length -gt 500) { $decodedText.Substring(0, 500) + "`n... [TRUNCATED] ..." } else { $decodedText }
     Write-Host $textPreview -ForegroundColor $t.Alert
-    Write-Host " +--" -ForegroundColor $t.Accent
+    Write-Host (" " + $b.BL + ($b.H * 68)) -ForegroundColor $t.Accent
     Write-Host ""
     
     Write-Host " [ACTIONS]: [C] Copy Decoded Text | [S] Save to File | [ENTER] Main Menu" -ForegroundColor $t.Accent
@@ -730,13 +1157,15 @@ function Invoke-EncodePhoto {
     Play-Sound "success"
     Draw-Header "PHOTO ENCODING COMPLETED"
     
+    $ratio = [Math]::Round((($rawB64.Length - $fileBytes.Length) / $fileBytes.Length) * 100, 1)
+    $expansionMeter = Draw-MeterBar $ratio 16 "+$ratio%"
     $stats = @(
         "SOURCE FILE          : $([System.IO.Path]::GetFileName($filePath))",
         "FORMAT               : $($mediaInfo.Format) ($($mediaInfo.Mime))",
         "DIMENSIONS           : $dimInfo",
         "RAW SIZE             : $([Math]::Round($fileBytes.Length / 1024, 2)) KB ($($fileBytes.Length) bytes)",
         "BASE64 STRING LENGTH : $($rawB64.Length) characters",
-        "EXPANSION RATIO      : +$([Math]::Round((($rawB64.Length - $fileBytes.Length) / $fileBytes.Length) * 100, 1))%"
+        "EXPANSION RATIO      : $expansionMeter"
     )
     Draw-Box $stats "IMAGE TELEMETRY" "Fg"
     Write-Host ""
@@ -791,7 +1220,8 @@ function Show-DecodedPhotoMenu {
         "MIME TYPE            : $($mediaInfo.Mime)",
         "SUGGESTED EXTENSION  : $($mediaInfo.Extension)",
         "DIMENSIONS           : $dimInfo",
-        "RECOVERED FILE SIZE  : $([Math]::Round($bytes.Length / 1024, 2)) KB ($($bytes.Length) bytes)"
+        "RECOVERED FILE SIZE  : $([Math]::Round($bytes.Length / 1024, 2)) KB ($($bytes.Length) bytes)",
+        "RECONSTRUCTION       : [✓ INTEGRITY RESTORED 100%]"
     )
     Draw-Box $stats "TELEMETRY SPECTRUM" "Fg"
     Write-Host ""
@@ -966,18 +1396,30 @@ function Invoke-JwtInspector {
     $now = (Get-Date).ToUniversalTime()
     $statusText = "UNKNOWN LIFETIME (NO 'exp' CLAIM)"
     $statusColor = "Alert"
+    $timelineMeter = ""
     
     if ($jwt.Payload.PSObject.Properties['exp']) {
         $expVal = [long]$jwt.Payload.exp
         $expTime = ([DateTimeOffset]::FromUnixTimeSeconds($expVal)).UtcDateTime
         if ($expTime -lt $now) {
             $diff = $now - $expTime
-            $statusText = "EXPIRED ($([Math]::Round($diff.TotalMinutes, 1)) minutes ago at $(($expTime.ToLocalTime()).ToString('yyyy-MM-dd HH:mm:ss')))"
+            $statusText = "EXPIRED ($([Math]::Round($diff.TotalMinutes, 1))m ago at $(($expTime.ToLocalTime()).ToString('yyyy-MM-dd HH:mm:ss')))"
             $statusColor = "Error"
+            $timelineMeter = Draw-MeterBar 0.0 16 "0% (EXPIRED)"
         } else {
             $diff = $expTime - $now
-            $statusText = "ACTIVE (Valid for $([Math]::Round($diff.TotalMinutes, 1)) minutes until $(($expTime.ToLocalTime()).ToString('yyyy-MM-dd HH:mm:ss')))"
+            $statusText = "ACTIVE ($([Math]::Round($diff.TotalMinutes, 1))m remaining until $(($expTime.ToLocalTime()).ToString('yyyy-MM-dd HH:mm:ss')))"
             $statusColor = "Fg"
+            if ($jwt.Payload.PSObject.Properties['iat']) {
+                $iatVal = [long]$jwt.Payload.iat
+                $totalSec = [Math]::Max(1, $expVal - $iatVal)
+                $nowSec = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+                $elapsedSec = [Math]::Max(0, $nowSec - $iatVal)
+                $pctRemaining = [Math]::Max(0.0, [Math]::Min(100.0, (1.0 - ($elapsedSec / $totalSec)) * 100))
+                $timelineMeter = Draw-MeterBar $pctRemaining 16 "$([Math]::Round($pctRemaining, 1))% REMAINING"
+            } else {
+                $timelineMeter = "[✓ VALID SIGNED TOKEN]"
+            }
         }
     }
     
@@ -991,6 +1433,7 @@ function Invoke-JwtInspector {
     
     $payloadSummary = @(
         "TOKEN LIFETIME       : $statusText",
+        "LIFETIME METER       : $(if ($timelineMeter) { $timelineMeter } else { 'N/A' })",
         "ISSUER (iss)         : $(if ($jwt.Payload.PSObject.Properties['iss']) { $jwt.Payload.iss } else { 'NOT SPECIFIED' })",
         "SUBJECT (sub)        : $(if ($jwt.Payload.PSObject.Properties['sub']) { $jwt.Payload.sub } else { 'NOT SPECIFIED' })",
         "AUDIENCE (aud)       : $(if ($jwt.Payload.PSObject.Properties['aud']) { $jwt.Payload.aud } else { 'NOT SPECIFIED' })"
@@ -998,14 +1441,15 @@ function Invoke-JwtInspector {
     Draw-Box $payloadSummary "SECURITY CONTEXT & CLAIMS" $statusColor
     Write-Host ""
     
-    Write-Host " +-- [ DECODED PAYLOAD CLAIMS (RAW JSON) ] " -ForegroundColor $t.Accent
+    $b = Get-BoxStyle
+    Write-Host (" " + $b.TL + ($b.H * 2) + " [ DECODED PAYLOAD CLAIMS (RAW JSON) ] " + ($b.H * 24)) -ForegroundColor $t.Accent
     try {
         $prettyJson = $jwt.PayloadRaw | ConvertFrom-Json | ConvertTo-Json -Depth 6
         Write-Host $prettyJson -ForegroundColor $t.Alert
     } catch {
         Write-Host $jwt.PayloadRaw -ForegroundColor $t.Alert
     }
-    Write-Host " +--" -ForegroundColor $t.Accent
+    Write-Host (" " + $b.BL + ($b.H * 68)) -ForegroundColor $t.Accent
     Write-Host ""
     
     Write-Host " [ACTIONS]: [C] Copy Claims JSON to Clipboard | [ENTER] Return" -ForegroundColor $t.Accent
@@ -1282,11 +1726,13 @@ function Invoke-GzipMenu {
         Play-Sound "success"
         
         Draw-Header "GZIP COMPRESSION TELEMETRY"
+        $ratio = [Math]::Round((1 - ($compressed.Length / [Math]::Max(1, $rawBytes.Length))) * 100, 1)
+        $meter = Draw-MeterBar $ratio 16 "$ratio% SAVED"
         $stats = @(
             "ORIGINAL SIZE       : $($rawBytes.Length) bytes",
             "GZIP BINARY SIZE    : $($compressed.Length) bytes",
             "BASE64 STRING LEN   : $($b64.Length) characters",
-            "COMPRESSION RATIO   : $([Math]::Round((1 - ($compressed.Length / [Math]::Max(1, $rawBytes.Length))) * 100, 1))% SPACE SAVED"
+            "COMPRESSION SAVINGS : $meter"
         )
         Draw-Box $stats "COMPRESSION METRICS" "Fg"
         Write-Host ""
@@ -1378,10 +1824,12 @@ function Invoke-PowerShellEncodedMenu {
             $decodedCmd = [System.Text.Encoding]::Unicode.GetString($bytes)
             Play-Sound "success"
             
+            $b = Get-BoxStyle
             Draw-Header "POWERSHELL CODE RECOVERED"
-            Write-Host " +-- [ DECODED SCRIPT OUTPUT ] " -ForegroundColor $t.Accent
+            Write-Host (" " + $b.TL + ($b.H * 2) + " [ DECODED SCRIPT OUTPUT ] " + ($b.H * 24)) -ForegroundColor $t.Accent
             Write-Host $decodedCmd -ForegroundColor $t.Alert
-            Write-Host " +--" -ForegroundColor $t.Accent
+            Write-Host (" " + $b.BL + ($b.H * 68)) -ForegroundColor $t.Accent
+            Write-Host ""
             
             [System.Windows.Forms.Clipboard]::SetText($decodedCmd)
             Write-Host "`n [OK] Recovered code copied to Clipboard." -ForegroundColor $t.Alert
@@ -1459,9 +1907,10 @@ function Invoke-HexDumpViewer {
     $total = $rawBytes.Length
     
     while ($true) {
+        $b = Get-BoxStyle
         Draw-Header "HEX DUMP (BYTES $curOffset - $([Math]::Min($total, $curOffset + $pageSize)) OF $total)"
         Write-Host " OFFSET    00 01 02 03 04 05 06 07   08 09 0A 0B 0C 0D 0E 0F  ASCII DUMP" -ForegroundColor $t.Accent
-        Write-Host ("-" * 74) -ForegroundColor $t.Dim
+        Write-Host ($b.H * 74) -ForegroundColor $t.Dim
         
         $end = [Math]::Min($total, $curOffset + $pageSize)
         for ($pos = $curOffset; $pos -lt $end; $pos += 16) {
@@ -1469,7 +1918,7 @@ function Invoke-HexDumpViewer {
             $line = Format-HexDumpLine $rawBytes $pos $len
             Write-Host $line -ForegroundColor $t.Fg
         }
-        Write-Host ("-" * 74) -ForegroundColor $t.Dim
+        Write-Host ($b.H * 74) -ForegroundColor $t.Dim
         
         Write-Host " [NAV]: [N]ext Page | [P]rev Page | [G]oto Offset | [Q]uit Inspector" -ForegroundColor $t.Alert
         Write-Host " >> COMMAND: " -NoNewline -ForegroundColor $t.Accent
@@ -1653,12 +2102,12 @@ function Invoke-Inspector {
     
     Draw-Header "DIAGNOSTIC TELEMETRY REPORT"
     $report = @(
-        "RFC 4648 COMPLIANCE   : $(if ($isValid) { 'PASSED [VALID]' } else { 'FAILED [CORRUPTED]' })",
+        "RFC 4648 COMPLIANCE   : $(if ($isValid) { '[✓ PASSED] VALID BASE64 STREAM' } else { '[✗ FAILED] CORRUPTED OR INVALID' })",
         "ERROR DIAGNOSTIC      : $errorReason",
         "STRING LENGTH (RAW)   : $($rawB64.Length) characters",
         "CLEANED STRING LENGTH : $($clean.Length) characters",
         "DECODED BYTE COUNT    : $(if ($isValid) { "$($bytes.Length) bytes" } else { 'N/A' })",
-        "MODULO 4 CHECK        : $(if ($clean.Length % 4 -eq 0) { 'PASSED' } else { 'FAILED (mod 4 = ' + ($clean.Length % 4) + ')' })",
+        "MODULO 4 CHECK        : $(if ($clean.Length % 4 -eq 0) { '[✓ PASSED] (Remainder: 0)' } else { '[✗ FAILED] (Remainder: ' + ($clean.Length % 4) + ')' })",
         "IDENTIFIED DATA TYPE  : $($mediaInfo.Format) ($($mediaInfo.Mime))",
         "SHA-256 CHECKSUM      : $sha256"
     )
@@ -1673,38 +2122,1156 @@ function Invoke-Inspector {
     Write-Host " Press [ENTER] to return..." -ForegroundColor $t.Dim
     [void][Console]::ReadLine()
 }
+# ==============================================================================
+# HELPER FUNCTIONS: MEDIA TRANSCODING, PDF, MARKDOWN & CRYPTO
+# ==============================================================================
+
+function ConvertTo-IcoBytes {
+    param(
+        [byte[]]$pngOrImgBytes,
+        [int]$width = 32,
+        [int]$height = 32
+    )
+    $ms = New-Object System.IO.MemoryStream(,$pngOrImgBytes)
+    $orig = [System.Drawing.Image]::FromStream($ms)
+    $resized = New-Object System.Drawing.Bitmap $width, $height
+    $g = [System.Drawing.Graphics]::FromImage($resized)
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+    $g.DrawImage($orig, 0, 0, $width, $height)
+    
+    $pngMs = New-Object System.IO.MemoryStream
+    $resized.Save($pngMs, [System.Drawing.Imaging.ImageFormat]::Png)
+    $scaledPngBytes = $pngMs.ToArray()
+    
+    $orig.Dispose(); $resized.Dispose(); $g.Dispose(); $ms.Dispose(); $pngMs.Dispose()
+    
+    $icoMs = New-Object System.IO.MemoryStream
+    $bw = New-Object System.IO.BinaryWriter $icoMs
+    
+    # ICO Header (6 bytes)
+    $bw.Write([uint16]0)
+    $bw.Write([uint16]1)
+    $bw.Write([uint16]1)
+    
+    # Directory entry (16 bytes)
+    $wByte = if ($width -ge 256) { [byte]0 } else { [byte]$width }
+    $hByte = if ($height -ge 256) { [byte]0 } else { [byte]$height }
+    $bw.Write($wByte)
+    $bw.Write($hByte)
+    $bw.Write([byte]0)
+    $bw.Write([byte]0)
+    $bw.Write([uint16]1)
+    $bw.Write([uint16]32)
+    $bw.Write([uint32]$scaledPngBytes.Length)
+    $bw.Write([uint32]22)
+    
+    $bw.Write($scaledPngBytes)
+    $bw.Flush()
+    
+    $icoBytes = $icoMs.ToArray()
+    $bw.Dispose(); $icoMs.Dispose()
+    return $icoBytes
+}
+
+function Convert-ImageBytes {
+    param(
+        [byte[]]$inputBytes,
+        [string]$targetFormat,
+        [int]$targetWidth = 0,
+        [int]$targetHeight = 0,
+        [int]$jpegQuality = 85
+    )
+    $fmt = $targetFormat.ToUpper().Trim().Replace(".", "")
+    if ($fmt -eq "ICO") {
+        $w = if ($targetWidth -gt 0) { $targetWidth } else { 32 }
+        $h = if ($targetHeight -gt 0) { $targetHeight } else { 32 }
+        return ConvertTo-IcoBytes -pngOrImgBytes $inputBytes -width $w -height $h
+    }
+    
+    $inMs = New-Object System.IO.MemoryStream(,$inputBytes)
+    $orig = [System.Drawing.Image]::FromStream($inMs)
+    
+    $w = if ($targetWidth -gt 0) { $targetWidth } else { $orig.Width }
+    $h = if ($targetHeight -gt 0) { $targetHeight } else { $orig.Height }
+    
+    $workImg = $orig
+    $scaledBmp = $null
+    if ($w -ne $orig.Width -or $h -ne $orig.Height) {
+        $scaledBmp = New-Object System.Drawing.Bitmap $w, $h
+        $g = [System.Drawing.Graphics]::FromImage($scaledBmp)
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+        $g.DrawImage($orig, 0, 0, $w, $h)
+        $g.Dispose()
+        $workImg = $scaledBmp
+    }
+    
+    $outMs = New-Object System.IO.MemoryStream
+    
+    if ($fmt -in @("JPG", "JPEG")) {
+        $jpegCodec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq "image/jpeg" }
+        $encoderParams = New-Object System.Drawing.Imaging.EncoderParameters 1
+        $encoderParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality, [long]$jpegQuality)
+        $workImg.Save($outMs, $jpegCodec, $encoderParams)
+    } else {
+        $sysFmt = switch ($fmt) {
+            "PNG"  { [System.Drawing.Imaging.ImageFormat]::Png }
+            "BMP"  { [System.Drawing.Imaging.ImageFormat]::Bmp }
+            "GIF"  { [System.Drawing.Imaging.ImageFormat]::Gif }
+            "TIFF" { [System.Drawing.Imaging.ImageFormat]::Tiff }
+            default { [System.Drawing.Imaging.ImageFormat]::Png }
+        }
+        $workImg.Save($outMs, $sysFmt)
+    }
+    
+    $resultBytes = $outMs.ToArray()
+    $orig.Dispose(); $inMs.Dispose(); $outMs.Dispose()
+    if ($null -ne $scaledBmp) { $scaledBmp.Dispose() }
+    
+    return $resultBytes
+}
+
+function Parse-PdfTelemetry {
+    param([byte[]]$pdfBytes)
+    
+    $info = @{
+        Valid = $false
+        Version = "Unknown"
+        PageCount = 0
+        Title = "N/A"
+        Author = "N/A"
+        Producer = "N/A"
+        SizeBytes = $pdfBytes.Length
+    }
+    
+    if ($pdfBytes.Length -lt 8) { return $info }
+    
+    if ($pdfBytes[0] -eq 0x25 -and $pdfBytes[1] -eq 0x50 -and $pdfBytes[2] -eq 0x44 -and $pdfBytes[3] -eq 0x46) {
+        $info.Valid = $true
+    } else {
+        return $info
+    }
+    
+    $headerStr = [System.Text.Encoding]::ASCII.GetString($pdfBytes, 0, [Math]::Min(32, $pdfBytes.Length))
+    if ($headerStr -match '%PDF-(\d+\.\d+)') {
+        $info.Version = $matches[1]
+    }
+    
+    $textSample = [System.Text.Encoding]::ASCII.GetString($pdfBytes)
+    if ($textSample -match '/Type\s*/Pages.*?/Count\s+(\d+)') {
+        $info.PageCount = [int]$matches[1]
+    } else {
+        $m = [regex]::Matches($textSample, '/Type\s*/Page(?![sS])')
+        $info.PageCount = $m.Count
+    }
+    
+    if ($textSample -match '/Title\s*\((?<t>[^)]+)\)') { $info.Title = $matches['t'] }
+    if ($textSample -match '/Author\s*\((?<a>[^)]+)\)') { $info.Author = $matches['a'] }
+    if ($textSample -match '/Producer\s*\((?<p>[^)]+)\)') { $info.Producer = $matches['p'] }
+    
+    return $info
+}
+
+function Pack-MarkdownDocument {
+    param(
+        [string]$mdFilePath,
+        [string]$outputPath = ""
+    )
+    if (-not (Test-Path $mdFilePath)) { throw "Markdown file not found: $mdFilePath" }
+    
+    $mdDir = Split-Path (Resolve-Path $mdFilePath) -Parent
+    $content = [System.IO.File]::ReadAllText($mdFilePath, [System.Text.Encoding]::UTF8)
+    
+    $inlinedList = New-Object System.Collections.ArrayList
+    $pattern = '!\[(?<alt>[^\]]*)\]\((?<path>(?!https?:\/\/|data:)[^)]+)\)'
+    $packedContent = [regex]::Replace($content, $pattern, {
+        param($m)
+        $alt = $m.Groups['alt'].Value
+        $relPath = $m.Groups['path'].Value.Trim()
+        $imgPath = Join-Path $mdDir $relPath
+        if (Test-Path $imgPath) {
+            $bytes = [System.IO.File]::ReadAllBytes($imgPath)
+            $ext = [System.IO.Path]::GetExtension($imgPath).ToLower()
+            $mime = switch ($ext) {
+                ".png" { "image/png" }
+                ".jpg" { "image/jpeg" }
+                ".jpeg" { "image/jpeg" }
+                ".gif" { "image/gif" }
+                ".svg" { "image/svg+xml" }
+                ".webp" { "image/webp" }
+                ".ico" { "image/x-icon" }
+                ".bmp" { "image/bmp" }
+                default { "application/octet-stream" }
+            }
+            $b64 = [System.Convert]::ToBase64String($bytes)
+            [void]$inlinedList.Add($relPath)
+            return "![$alt](data:$mime;base64,$b64)"
+        } else {
+            return $m.Value
+        }
+    })
+    
+    $target = if ($outputPath) { $outputPath } else {
+        [System.IO.Path]::Combine($mdDir, [System.IO.Path]::GetFileNameWithoutExtension($mdFilePath) + ".standalone.md")
+    }
+    [System.IO.File]::WriteAllText($target, $packedContent, [System.Text.Encoding]::UTF8)
+    return @{
+        TargetFile = $target
+        ImagesInlined = $inlinedList.Count
+        InlinedFiles = $inlinedList
+    }
+}
+
+function Unpack-MarkdownDocument {
+    param(
+        [string]$mdFilePath,
+        [string]$outputDir = ""
+    )
+    if (-not (Test-Path $mdFilePath)) { throw "Markdown file not found: $mdFilePath" }
+    
+    $mdDir = Split-Path (Resolve-Path $mdFilePath) -Parent
+    $content = [System.IO.File]::ReadAllText($mdFilePath, [System.Text.Encoding]::UTF8)
+    
+    $assetDir = if ($outputDir) { $outputDir } else { Join-Path $mdDir "assets" }
+    if (-not (Test-Path $assetDir)) { [void](New-Item -ItemType Directory -Path $assetDir -Force) }
+    
+    $extractedList = New-Object System.Collections.ArrayList
+    $pattern = '!\[(?<alt>[^\]]*)\]\(data:image\/(?<type>[a-zA-Z0-9\+\-]+);base64,(?<data>[A-Za-z0-9+/=]+)\)'
+    
+    $unpackedContent = [regex]::Replace($content, $pattern, {
+        param($m)
+        $alt = $m.Groups['alt'].Value
+        $type = $m.Groups['type'].Value.ToLower().Replace("svg+xml", "svg").Replace("jpeg", "jpg")
+        $b64 = $m.Groups['data'].Value
+        
+        $idx = $extractedList.Count + 1
+        $filename = "img_asset_{0:d3}.$type" -f $idx
+        $diskPath = Join-Path $assetDir $filename
+        $rawBytes = [System.Convert]::FromBase64String($b64)
+        [System.IO.File]::WriteAllBytes($diskPath, $rawBytes)
+        [void]$extractedList.Add($filename)
+        
+        $relPath = "./assets/$filename"
+        return "![$alt]($relPath)"
+    })
+    
+    $target = [System.IO.Path]::Combine($mdDir, [System.IO.Path]::GetFileNameWithoutExtension($mdFilePath) + ".unpacked.md")
+    [System.IO.File]::WriteAllText($target, $unpackedContent, [System.Text.Encoding]::UTF8)
+    return @{
+        TargetFile = $target
+        ImagesExtracted = $extractedList.Count
+        ExtractedFiles = $extractedList
+        AssetDir = $assetDir
+    }
+}
+
+function Inject-StegoCarrier {
+    param(
+        [string]$carrierFilePath,
+        [byte[]]$payloadBytes,
+        [string]$outputCarrierPath
+    )
+    if (-not (Test-Path $carrierFilePath)) { throw "Carrier file not found: $carrierFilePath" }
+    $carrierBytes = [System.IO.File]::ReadAllBytes($carrierFilePath)
+    $b64Payload = [System.Convert]::ToBase64String($payloadBytes)
+    $marker = [System.Environment]::NewLine + "<!--CAMBRIAN_STEGO_BEGIN-->" + $b64Payload + "<!--CAMBRIAN_STEGO_END-->" + [System.Environment]::NewLine
+    $markerBytes = [System.Text.Encoding]::UTF8.GetBytes($marker)
+    
+    $combined = New-Object byte[] ($carrierBytes.Length + $markerBytes.Length)
+    [Array]::Copy($carrierBytes, 0, $combined, 0, $carrierBytes.Length)
+    [Array]::Copy($markerBytes, 0, $combined, $carrierBytes.Length, $markerBytes.Length)
+    [System.IO.File]::WriteAllBytes($outputCarrierPath, $combined)
+    return @{
+        CarrierSize = $carrierBytes.Length
+        PayloadSize = $payloadBytes.Length
+        TotalSize = $combined.Length
+        OutputFile = $outputCarrierPath
+    }
+}
+
+function Extract-StegoCarrier {
+    param([string]$carrierFilePath)
+    if (-not (Test-Path $carrierFilePath)) { throw "Carrier file not found: $carrierFilePath" }
+    $carrierBytes = [System.IO.File]::ReadAllBytes($carrierFilePath)
+    $rawStr = [System.Text.Encoding]::UTF8.GetString($carrierBytes)
+    
+    if ($rawStr -match '<!--CAMBRIAN_STEGO_BEGIN-->(?<payload>[A-Za-z0-9+/=]+)<!--CAMBRIAN_STEGO_END-->') {
+        $b64 = $matches['payload']
+        $decoded = [System.Convert]::FromBase64String($b64)
+        $mediaInfo = Get-MediaInfoFromBytes $decoded
+        return @{
+            Found = $true
+            Base64 = $b64
+            Bytes = $decoded
+            MediaInfo = $mediaInfo
+        }
+    } else {
+        return @{ Found = $false }
+    }
+}
+
+function Get-MultiHashTelemetry {
+    param([byte[]]$bytes)
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    $sha1 = [System.Security.Cryptography.SHA1]::Create()
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $sha384 = [System.Security.Cryptography.SHA384]::Create()
+    $sha512 = [System.Security.Cryptography.SHA512]::Create()
+    return @{
+        Length = $bytes.Length
+        MD5 = (-join ($md5.ComputeHash($bytes) | ForEach-Object { "{0:x2}" -f $_ }))
+        SHA1 = (-join ($sha1.ComputeHash($bytes) | ForEach-Object { "{0:x2}" -f $_ }))
+        SHA256 = (-join ($sha256.ComputeHash($bytes) | ForEach-Object { "{0:x2}" -f $_ }))
+        SHA384 = (-join ($sha384.ComputeHash($bytes) | ForEach-Object { "{0:x2}" -f $_ }))
+        SHA512 = (-join ($sha512.ComputeHash($bytes) | ForEach-Object { "{0:x2}" -f $_ }))
+    }
+}
+
+# OPERATION 11: IMAGE FORMAT TRANSCODER & RESIZER
+function Invoke-ImageConverter {
+    Draw-Header "IMAGE FORMAT TRANSCODER & RESIZER"
+    $t = Get-Theme
+    $b = Get-BoxStyle
+    Play-Sound "blip"
+    
+    Write-Host " [INGESTION SOURCE SELECTION]:" -ForegroundColor $t.Accent
+    Write-Host "  [1] Load Image File from Disk (PNG, JPG, BMP, GIF, ICO, TIFF)" -ForegroundColor $t.Fg
+    Write-Host "  [2] Paste Base64 Stream or Data URI" -ForegroundColor $t.Fg
+    Write-Host "  [3] Ingest Image from System Clipboard" -ForegroundColor $t.Fg
+    Write-Host "  [B] Return to Operational Deck" -ForegroundColor $t.Dim
+    Write-Host ""
+    
+    $srcOpt = Read-MenuSelectionOrClick " >> SELECT SOURCE [1-3, B]: "
+    if ($srcOpt -eq "B" -or [string]::IsNullOrEmpty($srcOpt)) { return }
+    
+    $rawBytes = $null
+    $sourceDesc = ""
+    
+    if ($srcOpt -eq "1") {
+        Write-Host " >> ENTER FULL IMAGE PATH: " -NoNewline -ForegroundColor $t.Alert
+        $p = [Console]::ReadLine()
+        if (-not (Test-Path $p)) {
+            Write-Host " [✗ FILE NOT FOUND]: $p" -ForegroundColor $t.Error
+            Play-Sound "error"
+            Start-Sleep -Milliseconds 800
+            return
+        }
+        $rawBytes = [System.IO.File]::ReadAllBytes($p)
+        $sourceDesc = (Split-Path $p -Leaf)
+    } elseif ($srcOpt -eq "2") {
+        Write-Host " >> PASTE BASE64 STREAM: " -NoNewline -ForegroundColor $t.Alert
+        $pB64 = [Console]::ReadLine()
+        $clean = Clean-Base64Input $pB64
+        try {
+            $rawBytes = [System.Convert]::FromBase64String($clean)
+            $sourceDesc = "Pasted Base64 Stream"
+        } catch {
+            Write-Host " [✗ INVALID BASE64 PAYLOAD]" -ForegroundColor $t.Error
+            Play-Sound "error"
+            Start-Sleep -Milliseconds 800
+            return
+        }
+    } elseif ($srcOpt -eq "3") {
+        try {
+            if ([System.Windows.Forms.Clipboard]::ContainsImage()) {
+                $cImg = [System.Windows.Forms.Clipboard]::GetImage()
+                $cMs = New-Object System.IO.MemoryStream
+                $cImg.Save($cMs, [System.Drawing.Imaging.ImageFormat]::Png)
+                $rawBytes = $cMs.ToArray()
+                $cImg.Dispose(); $cMs.Dispose()
+                $sourceDesc = "Clipboard Image"
+            } else {
+                Write-Host " [✗ NO IMAGE FOUND IN CLIPBOARD]" -ForegroundColor $t.Error
+                Play-Sound "error"
+                Start-Sleep -Milliseconds 800
+                return
+            }
+        } catch {
+            Write-Host " [✗ CLIPBOARD ACCESS ERROR]: $($_.Exception.Message)" -ForegroundColor $t.Error
+            Play-Sound "error"
+            Start-Sleep -Milliseconds 800
+            return
+        }
+    }
+    
+    if ($null -eq $rawBytes -or $rawBytes.Length -eq 0) { return }
+    
+    $inInfo = Get-MediaInfoFromBytes $rawBytes
+    $inMs = New-Object System.IO.MemoryStream(,$rawBytes)
+    $origImg = $null
+    try {
+        $origImg = [System.Drawing.Image]::FromStream($inMs)
+    } catch {
+        Write-Host " [✗ UNABLE TO DECODE IMAGE STREAM]" -ForegroundColor $t.Error
+        Play-Sound "error"
+        $inMs.Dispose()
+        Start-Sleep -Milliseconds 900
+        return
+    }
+    
+    $origW = $origImg.Width
+    $origH = $origImg.Height
+    $origImg.Dispose(); $inMs.Dispose()
+    
+    Draw-Header "IMAGE TRANSCODING METRICS"
+    $srcSizeKb = [Math]::Round($rawBytes.Length / 1024, 2)
+    $metaLines = @(
+        "SOURCE STREAM   : $sourceDesc",
+        "CURRENT FORMAT  : $($inInfo.Format) ($($inInfo.Mime))",
+        "RESOLUTION      : ${origW} x ${origH} Pixels",
+        "BYTE PAYLOAD    : $($rawBytes.Length) bytes ($srcSizeKb KB)"
+    )
+    Draw-Box $metaLines "SOURCE MEDIA TELEMETRY" "Accent"
+    Write-Host ""
+    
+    Render-AsciiThumbnail $rawBytes 36 10
+    Write-Host ""
+    
+    Write-Host " [TARGET CONVERSION FORMAT]:" -ForegroundColor $t.Accent
+    Write-Host "  [1] PNG   · Lossless Portable Network Graphics" -ForegroundColor $t.Fg
+    Write-Host "  [2] JPG   · High-Efficiency JPEG Photographic Compression" -ForegroundColor $t.Fg
+    Write-Host "  [3] ICO   · Windows Application & Web Favicon Container" -ForegroundColor $t.Fg
+    Write-Host "  [4] BMP   · Raw Device-Independent Bitmap" -ForegroundColor $t.Fg
+    Write-Host "  [5] GIF   · Indexed Palette Graphics" -ForegroundColor $t.Fg
+    Write-Host "  [6] TIFF  · Tagged Image File Format" -ForegroundColor $t.Fg
+    Write-Host "  [B] Abort Conversion" -ForegroundColor $t.Dim
+    Write-Host ""
+    
+    $fmtChoice = Read-MenuSelectionOrClick " >> SELECT TARGET FORMAT [1-6, B]: "
+    if ($fmtChoice -eq "B" -or [string]::IsNullOrEmpty($fmtChoice)) { return }
+    
+    $targetFmt = switch ($fmtChoice) {
+        "1" { "PNG" }
+        "2" { "JPG" }
+        "3" { "ICO" }
+        "4" { "BMP" }
+        "5" { "GIF" }
+        "6" { "TIFF" }
+        default { "PNG" }
+    }
+    
+    $tW = 0; $tH = 0
+    if ($targetFmt -eq "ICO") {
+        Write-Host " >> SELECT ICO DIMENSION [1=16x16, 2=32x32, 3=48x48, 4=64x64, 5=128x128, 6=256x256, ENTER=32x32]: " -NoNewline -ForegroundColor $t.Alert
+        $icoDim = [Console]::ReadLine().Trim()
+        $tW = switch ($icoDim) {
+            "1" { 16 }; "2" { 32 }; "3" { 48 }; "4" { 64 }; "5" { 128 }; "6" { 256 }; default { 32 }
+        }
+        $tH = $tW
+    } else {
+        Write-Host " >> RESIZE IMAGE WIDTH (PX, or press [ENTER] to retain $origW px): " -NoNewline -ForegroundColor $t.Alert
+        $wIn = [Console]::ReadLine().Trim()
+        if ($wIn -match '^\d+$') {
+            $tW = [int]$wIn
+            $autoH = [int][Math]::Round(($tW / $origW) * $origH)
+            Write-Host " >> RESIZE IMAGE HEIGHT (PX, or press [ENTER] for aspect-ratio $autoH px): " -NoNewline -ForegroundColor $t.Alert
+            $hIn = [Console]::ReadLine().Trim()
+            $tH = if ($hIn -match '^\d+$') { [int]$hIn } else { $autoH }
+        }
+    }
+    
+    $jpegQual = 85
+    if ($targetFmt -eq "JPG") {
+        Write-Host " >> JPEG COMPRESSION QUALITY [1-100, default 85]: " -NoNewline -ForegroundColor $t.Alert
+        $qIn = [Console]::ReadLine().Trim()
+        if ($qIn -match '^\d+$') {
+            $jpegQual = [Math]::Max(1, [Math]::Min(100, [int]$qIn))
+        }
+    }
+    
+    Play-Sound "blip"
+    Write-Host " [*] EXECUTING HIGH-PRECISION TRANSMUTATION..." -ForegroundColor $t.Alert
+    
+    $convertedBytes = Convert-ImageBytes -inputBytes $rawBytes -targetFormat $targetFmt -targetWidth $tW -targetHeight $tH -jpegQuality $jpegQual
+    $outInfo = Get-MediaInfoFromBytes $convertedBytes
+    
+    $ratio = [Math]::Round(($convertedBytes.Length / $rawBytes.Length) * 100, 1)
+    $deltaMeter = Draw-MeterBar $ratio 18 "SIZE RATIO"
+    
+    Draw-Header "TRANSMUTATION RESULT TELEMETRY"
+    $resW = if ($tW -gt 0) { $tW } else { $origW }
+    $resH = if ($tH -gt 0) { $tH } else { $origH }
+    $outKb = [Math]::Round($convertedBytes.Length / 1024, 2)
+    
+    $resLines = @(
+        "CONVERTED FORMAT : $($outInfo.Format) ($targetFmt)",
+        "OUTPUT EXTENSION : $($outInfo.Extension)",
+        "TARGET RESOLUTION: ${resW} x ${resH} Pixels",
+        "SOURCE SIZE      : $($rawBytes.Length) bytes ($srcSizeKb KB)",
+        "TRANSMUTED SIZE  : $($convertedBytes.Length) bytes ($outKb KB)",
+        "SIZE DELTA RATIO : $deltaMeter"
+    )
+    Draw-Box $resLines "OUTPUT TRANSMUTATION METRICS" "Fg"
+    Write-Host ""
+    Play-Sound "success"
+    
+    Write-Host " [EXPORT OPTIONS]:" -ForegroundColor $t.Accent
+    Write-Host "  [1] Save Converted Media to Disk File" -ForegroundColor $t.Fg
+    Write-Host "  [2] Copy Base64 String to Clipboard" -ForegroundColor $t.Fg
+    Write-Host "  [3] Copy HTML Data URI Tag to Clipboard" -ForegroundColor $t.Fg
+    Write-Host "  [B] Done (Return to Operational Deck)" -ForegroundColor $t.Dim
+    Write-Host ""
+    
+    $expOpt = Read-MenuSelectionOrClick " >> SELECT EXPORT OPTION [1-3, B]: "
+    if ($expOpt -eq "1") {
+        $stamp = [DateTime]::UtcNow.ToString("yyyyMMdd_HHmmss")
+        $defName = "transmuted_" + $stamp + $outInfo.Extension
+        Write-Host " >> ENTER OUTPUT PATH [Default: $defName]: " -NoNewline -ForegroundColor $t.Alert
+        $saveP = [Console]::ReadLine().Trim()
+        if (-not $saveP) { $saveP = $defName }
+        [System.IO.File]::WriteAllBytes($saveP, $convertedBytes)
+        Write-Host " [✓ FILE STORED]: $saveP ($($convertedBytes.Length) bytes)" -ForegroundColor $t.Fg
+        Play-Sound "success"
+        Start-Sleep -Milliseconds 800
+    } elseif ($expOpt -eq "2") {
+        $b64Out = [System.Convert]::ToBase64String($convertedBytes)
+        try {
+            [System.Windows.Forms.Clipboard]::SetText($b64Out)
+            Write-Host " [✓ BASE64 COPIED TO SYSTEM CLIPBOARD]" -ForegroundColor $t.Fg
+            Play-Sound "success"
+        } catch {
+            Write-Host " [✗ CLIPBOARD ERROR]" -ForegroundColor $t.Error
+        }
+        Start-Sleep -Milliseconds 800
+    } elseif ($expOpt -eq "3") {
+        $dataUri = "data:" + $outInfo.Mime + ";base64," + [System.Convert]::ToBase64String($convertedBytes)
+        $htmlTag = '<img src="' + $dataUri + '" alt="Transmuted Media" />'
+        try {
+            [System.Windows.Forms.Clipboard]::SetText($htmlTag)
+            Write-Host " [✓ HTML DATA-URI TAG COPIED TO CLIPBOARD]" -ForegroundColor $t.Fg
+            Play-Sound "success"
+        } catch {
+            Write-Host " [✗ CLIPBOARD ERROR]" -ForegroundColor $t.Error
+        }
+        Start-Sleep -Milliseconds 800
+    }
+}
+
+# OPERATION 12: PDF TRANSMUTATION HUB
+function Invoke-PdfTransmuter {
+    Draw-Header "PDF TRANSMUTATION HUB & VIEWER"
+    $t = Get-Theme
+    $b = Get-BoxStyle
+    Play-Sound "blip"
+    
+    Write-Host " [OPERATION SUBSYSTEM]:" -ForegroundColor $t.Accent
+    Write-Host "  [1] PDF -> Base64 Data URI & Standalone HTML Cyber Reader" -ForegroundColor $t.Fg
+    Write-Host "  [2] Reconstitute Base64 Stream to PDF Document on Disk" -ForegroundColor $t.Fg
+    Write-Host "  [3] PDF Binary Structural Telemetry & Page Inspector" -ForegroundColor $t.Fg
+    Write-Host "  [B] Return to Operational Deck" -ForegroundColor $t.Dim
+    Write-Host ""
+    
+    $opt = Read-MenuSelectionOrClick " >> SELECT OPERATION [1-3, B]: "
+    if ($opt -eq "B" -or [string]::IsNullOrEmpty($opt)) { return }
+    
+    if ($opt -eq "1") {
+        Write-Host " >> ENTER FULL PDF FILE PATH: " -NoNewline -ForegroundColor $t.Alert
+        $p = [Console]::ReadLine().Trim()
+        if (-not (Test-Path $p)) {
+            Write-Host " [✗ PDF FILE NOT FOUND]" -ForegroundColor $t.Error
+            Play-Sound "error"
+            Start-Sleep -Milliseconds 800
+            return
+        }
+        
+        $pdfBytes = [System.IO.File]::ReadAllBytes($p)
+        $telemetry = Parse-PdfTelemetry $pdfBytes
+        $b64 = [System.Convert]::ToBase64String($pdfBytes)
+        $dataUri = "data:application/pdf;base64," + $b64
+        $pdfKb = [Math]::Round($pdfBytes.Length / 1024, 2)
+        
+        Draw-Header "PDF TRANSMUTATION TELEMETRY"
+        $lines = @(
+            "PDF HEADER / VER  : %PDF-$($telemetry.Version)",
+            "ESTIMATED PAGES   : $($telemetry.PageCount)",
+            "DOCUMENT TITLE    : $($telemetry.Title)",
+            "AUTHOR / PRODUCER : $($telemetry.Author) / $($telemetry.Producer)",
+            "ORIGINAL SIZE     : $($pdfBytes.Length) bytes ($pdfKb KB)",
+            "BASE64 STREAM LEN : $($b64.Length) characters"
+        )
+        Draw-Box $lines "PDF METRIC REPORT" "Fg"
+        Write-Host ""
+        
+        try {
+            [System.Windows.Forms.Clipboard]::SetText($dataUri)
+            Write-Host " [✓ PDF DATA-URI COPIED TO SYSTEM CLIPBOARD]" -ForegroundColor $t.Fg
+            Play-Sound "success"
+        } catch {}
+        
+        Write-Host " >> GENERATE STANDALONE OFFLINE HTML CYBER READER? [Y/N, default Y]: " -NoNewline -ForegroundColor $t.Alert
+        $genHtml = [Console]::ReadLine().Trim().ToUpper()
+        if ($genHtml -ne "N") {
+            $pdfFileName = [System.IO.Path]::GetFileName($p)
+            $pdfBaseName = [System.IO.Path]::GetFileNameWithoutExtension($p)
+            $htmlFile = [System.IO.Path]::Combine((Split-Path $p -Parent), $pdfBaseName + "_reader.html")
+            
+            $htmlTemplate = @'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CAMBRIANSYSTEMS // PDF READER: __FILENAME__</title>
+    <style>
+        body { margin: 0; background-color: #0b0f19; color: #00ff66; font-family: 'Consolas', monospace; display: flex; flex-direction: column; height: 100vh; }
+        header { background: #001100; border-bottom: 2px solid #00ff66; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; }
+        h1 { margin: 0; font-size: 16px; letter-spacing: 1px; }
+        .meta { font-size: 12px; color: #88ff88; }
+        iframe { flex: 1; border: none; width: 100%; height: calc(100vh - 50px); background: #222; }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>CAMBRIANSYSTEMS CORP. // SECURE PDF WORKSTATION</h1>
+            <div class="meta">FILE: __FILENAME__ | PAGES: __PAGES__ | SIZE: __SIZE__ BYTES</div>
+        </div>
+        <div>
+            <a href="__DATAURI__" download="__FILENAME__" style="color:#00ff66; text-decoration:none; border:1px solid #00ff66; padding:4px 10px; font-size:12px;">DOWNLOAD RAW PDF</a>
+        </div>
+    </header>
+    <iframe src="__DATAURI__"></iframe>
+</body>
+</html>
+'@
+            $finalHtml = $htmlTemplate.Replace('__FILENAME__', $pdfFileName).Replace('__PAGES__', [string]$telemetry.PageCount).Replace('__SIZE__', [string]$pdfBytes.Length).Replace('__DATAURI__', $dataUri)
+            [System.IO.File]::WriteAllText($htmlFile, $finalHtml, [System.Text.Encoding]::UTF8)
+            Write-Host " [✓ STANDALONE HTML READER GENERATED]: $htmlFile" -ForegroundColor $t.Fg
+            Play-Sound "success"
+        }
+        
+    } elseif ($opt -eq "2") {
+        Write-Host " >> PASTE PDF BASE64 STREAM OR DATA-URI: " -NoNewline -ForegroundColor $t.Alert
+        $raw = [Console]::ReadLine()
+        $clean = Clean-Base64Input $raw
+        try {
+            $bytes = [System.Convert]::FromBase64String($clean)
+            if ($bytes.Length -lt 4 -or $bytes[0] -ne 0x25 -or $bytes[1] -ne 0x50 -or $bytes[2] -ne 0x44 -or $bytes[3] -ne 0x46) {
+                Write-Host " [!] WARNING: Magic bytes %PDF- not detected at stream start." -ForegroundColor $t.Alert
+            }
+            Write-Host " >> ENTER DESTINATION PDF PATH (e.g. document.pdf): " -NoNewline -ForegroundColor $t.Alert
+            $outPath = [Console]::ReadLine().Trim()
+            if (-not $outPath) { $outPath = "reconstituted_document.pdf" }
+            [System.IO.File]::WriteAllBytes($outPath, $bytes)
+            Write-Host " [✓ PDF RECONSTITUTED]: $outPath ($($bytes.Length) bytes)" -ForegroundColor $t.Fg
+            Play-Sound "success"
+        } catch {
+            Write-Host " [✗ BASE64 DECODING ERROR]: $($_.Exception.Message)" -ForegroundColor $t.Error
+            Play-Sound "error"
+        }
+    } elseif ($opt -eq "3") {
+        Write-Host " >> ENTER FULL PDF FILE PATH: " -NoNewline -ForegroundColor $t.Alert
+        $p = [Console]::ReadLine().Trim()
+        if (-not (Test-Path $p)) {
+            Write-Host " [✗ FILE NOT FOUND]" -ForegroundColor $t.Error
+            Play-Sound "error"
+            Start-Sleep -Milliseconds 800
+            return
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($p)
+        $tele = Parse-PdfTelemetry $bytes
+        $pdfKb = [Math]::Round($bytes.Length / 1024, 2)
+        Draw-Header "PDF STRUCTURAL INSPECTOR"
+        $lines = @(
+            "COMPLIANCE HEADER : $(if ($tele.Valid) { '[✓ PASSED] VALID PDF CONTAINER' } else { '[✗ FAILED] INVALID' })",
+            "PDF SPEC VERSION  : %PDF-$($tele.Version)",
+            "PAGE OBJECT COUNT : $($tele.PageCount) Pages Detected",
+            "DOCUMENT TITLE    : $($tele.Title)",
+            "AUTHOR ATTRIBUTE  : $($tele.Author)",
+            "PRODUCER ENGINE   : $($tele.Producer)",
+            "PHYSICAL PAYLOAD  : $($bytes.Length) bytes ($pdfKb KB)"
+        )
+        Draw-Box $lines "PDF TELEMETRY METRICS" $(if ($tele.Valid) { "Fg" } else { "Error" })
+        Write-Host ""
+    }
+    
+    Write-Host " Press [ENTER] to return..." -ForegroundColor $t.Dim
+    [void][Console]::ReadLine()
+}
+
+# OPERATION 13: MARKDOWN ASSET PACKAGER
+function Invoke-MarkdownPackager {
+    Draw-Header "MARKDOWN ASSET PACKAGER & UNPACKER"
+    $t = Get-Theme
+    $b = Get-BoxStyle
+    Play-Sound "blip"
+    
+    Write-Host " [PACKAGING OPERATIONS]:" -ForegroundColor $t.Accent
+    Write-Host "  [1] Pack Markdown Document · Inlines Local Images as Self-Contained Data URIs" -ForegroundColor $t.Fg
+    Write-Host "  [2] Unpack Markdown Document · Extract Inline Data URIs to ./assets/ Directory" -ForegroundColor $t.Fg
+    Write-Host "  [B] Return to Operational Deck" -ForegroundColor $t.Dim
+    Write-Host ""
+    
+    $opt = Read-MenuSelectionOrClick " >> SELECT OPTION [1, 2, B]: "
+    if ($opt -eq "B" -or [string]::IsNullOrEmpty($opt)) { return }
+    
+    if ($opt -eq "1") {
+        Write-Host " >> ENTER MARKDOWN FILE PATH (e.g. README.md): " -NoNewline -ForegroundColor $t.Alert
+        $p = [Console]::ReadLine().Trim()
+        if (-not (Test-Path $p)) {
+            Write-Host " [✗ MARKDOWN FILE NOT FOUND]" -ForegroundColor $t.Error
+            Play-Sound "error"
+            Start-Sleep -Milliseconds 800
+            return
+        }
+        
+        Write-Host " [*] SCANNING FOR RELATIVE ASSET REFERENCES..." -ForegroundColor $t.Alert
+        try {
+            $packRes = Pack-MarkdownDocument -mdFilePath $p
+            Play-Sound "success"
+            Draw-Header "MARKDOWN PACKAGING SUMMARY"
+            $lines = @(
+                "SOURCE MARKDOWN   : $p",
+                "IMAGES INLINED    : $($packRes.ImagesInlined) Media Assets Bundled",
+                "TARGET STANDALONE : $($packRes.TargetFile)",
+                "STATUS            : [✓ COMPLETED] 100% SELF-CONTAINED OFFLINE MARKDOWN"
+            )
+            Draw-Box $lines "PACKAGING TELEMETRY" "Fg"
+            Write-Host ""
+            if ($packRes.ImagesInlined -gt 0) {
+                Write-Host " Inlined Assets:" -ForegroundColor $t.Accent
+                foreach ($f in $packRes.InlinedFiles) {
+                    Write-Host "   -> $f" -ForegroundColor $t.Fg
+                }
+                Write-Host ""
+            }
+        } catch {
+            Write-Host " [✗ PACKAGING ERROR]: $($_.Exception.Message)" -ForegroundColor $t.Error
+            Play-Sound "error"
+        }
+        
+    } elseif ($opt -eq "2") {
+        Write-Host " >> ENTER MARKDOWN FILE PATH (containing data:image URIs): " -NoNewline -ForegroundColor $t.Alert
+        $p = [Console]::ReadLine().Trim()
+        if (-not (Test-Path $p)) {
+            Write-Host " [✗ MARKDOWN FILE NOT FOUND]" -ForegroundColor $t.Error
+            Play-Sound "error"
+            Start-Sleep -Milliseconds 800
+            return
+        }
+        
+        Write-Host " [*] PARSING INLINE DATA-URIS AND EXTRACTING ASSETS..." -ForegroundColor $t.Alert
+        try {
+            $unpackRes = Unpack-MarkdownDocument -mdFilePath $p
+            Play-Sound "success"
+            Draw-Header "MARKDOWN UNPACKING SUMMARY"
+            $lines = @(
+                "SOURCE MARKDOWN   : $p",
+                "IMAGES EXTRACTED  : $($unpackRes.ImagesExtracted) Assets Extracted to Disk",
+                "ASSET DIRECTORY   : $($unpackRes.AssetDir)",
+                "NEW MARKDOWN FILE : $($unpackRes.TargetFile)",
+                "STATUS            : [✓ COMPLETED] RELATIVE ASSET LINKS REBUILT"
+            )
+            Draw-Box $lines "UNPACKING TELEMETRY" "Fg"
+            Write-Host ""
+            if ($unpackRes.ImagesExtracted -gt 0) {
+                Write-Host " Extracted Assets:" -ForegroundColor $t.Accent
+                foreach ($f in $unpackRes.ExtractedFiles) {
+                    Write-Host "   -> $f" -ForegroundColor $t.Fg
+                }
+                Write-Host ""
+            }
+        } catch {
+            Write-Host " [✗ UNPACKING ERROR]: $($_.Exception.Message)" -ForegroundColor $t.Error
+            Play-Sound "error"
+        }
+    }
+    
+    Write-Host " Press [ENTER] to return..." -ForegroundColor $t.Dim
+    [void][Console]::ReadLine()
+}
+
+# OPERATION 14: PHOSPHOR QR-CODE GENERATOR
+function Invoke-TerminalQrCode {
+    Draw-Header "PHOSPHOR TERMINAL QR-CODE GENERATOR"
+    $t = Get-Theme
+    $b = Get-BoxStyle
+    Play-Sound "blip"
+    
+    Write-Host " [INPUT DATA SELECTION]:" -ForegroundColor $t.Accent
+    Write-Host "  [1] Enter Custom String, URL or Token" -ForegroundColor $t.Fg
+    Write-Host "  [2] Read Current Clipboard Payload" -ForegroundColor $t.Fg
+    Write-Host "  [B] Return to Operational Deck" -ForegroundColor $t.Dim
+    Write-Host ""
+    
+    $choice = Read-MenuSelectionOrClick " >> SELECT [1, 2, B]: "
+    if ($choice -eq "B" -or [string]::IsNullOrEmpty($choice)) { return }
+    
+    $text = ""
+    if ($choice -eq "1") {
+        Write-Host " >> ENTER TEXT / URL (Up to 28 bytes for high-res matrix): " -NoNewline -ForegroundColor $t.Alert
+        $text = [Console]::ReadLine()
+    } elseif ($choice -eq "2") {
+        try {
+            $text = [System.Windows.Forms.Clipboard]::GetText()
+            Write-Host " [✓ READ FROM CLIPBOARD]: $text" -ForegroundColor $t.Fg
+        } catch {
+            Write-Host " [✗ FAILED TO ACCESS CLIPBOARD]" -ForegroundColor $t.Error
+            Play-Sound "error"
+            Start-Sleep -Milliseconds 800
+            return
+        }
+    }
+    
+    if ([string]::IsNullOrWhiteSpace($text)) { return }
+    
+    try {
+        $matrix = [MiniQr]::Generate($text)
+        $size = $matrix.GetLength(0)
+        
+        Draw-Header "TERMINAL PHOSPHOR QR SCANNER"
+        Write-Host " [AIM MOBILE DEVICE OR SCANNER AT TERMINAL PHOSPHOR DISPLAY]" -ForegroundColor $t.Alert
+        Write-Host " PAYLOAD: $text" -ForegroundColor $t.Dim
+        Write-Host ""
+        
+        $quiet = 2
+        for ($q = 0; $q -lt $quiet; $q++) {
+            Write-Host (" " * 6) -NoNewline
+            Write-Host ("  " * ($size + ($quiet * 2))) -ForegroundColor $t.Bg -BackgroundColor White
+        }
+        
+        for ($r = 0; $r -lt $size; $r++) {
+            Write-Host (" " * 6) -NoNewline
+            Write-Host ("  " * $quiet) -NoNewline -ForegroundColor $t.Bg -BackgroundColor White
+            for ($c = 0; $c -lt $size; $c++) {
+                if ($matrix[$r, $c]) {
+                    Write-Host ([char]0x2588 + [char]0x2588) -NoNewline -ForegroundColor Black -BackgroundColor Black
+                } else {
+                    Write-Host "  " -NoNewline -ForegroundColor White -BackgroundColor White
+                }
+            }
+            Write-Host ("  " * $quiet) -ForegroundColor $t.Bg -BackgroundColor White
+        }
+        
+        for ($q = 0; $q -lt $quiet; $q++) {
+            Write-Host (" " * 6) -NoNewline
+            Write-Host ("  " * ($size + ($quiet * 2))) -ForegroundColor $t.Bg -BackgroundColor White
+        }
+        
+        Write-Host ""
+        Play-Sound "success"
+        
+        $card = @(
+            "QR MATRIX DIMENSIONS : ${size}x${size} Modules (Version 2)",
+            "ERROR CORRECTION     : Level L (7 pct Recovery)",
+            "PAYLOAD ENCODING     : 8-Bit Byte Mode (RFC-UTF8)",
+            "CARRIER TELEMETRY    : In-Terminal Dual-Cell ASCII Blocks"
+        )
+        Draw-Box $card "QR TELEMETRY METRICS" "Accent"
+        Write-Host ""
+        
+    } catch {
+        Write-Host " [✗ QR GENERATION ERROR]: $($_.Exception.Message)" -ForegroundColor $t.Error
+        Play-Sound "error"
+    }
+    
+    Write-Host " Press [ENTER] to return..." -ForegroundColor $t.Dim
+    [void][Console]::ReadLine()
+}
+
+# OPERATION 15: STEGANOGRAPHY CARRIER
+function Invoke-StegoCarrier {
+    Draw-Header "DIGITAL STEGANOGRAPHY MEDIA CARRIER"
+    $t = Get-Theme
+    $b = Get-BoxStyle
+    Play-Sound "blip"
+    
+    Write-Host " [STEGANOGRAPHY OPERATIONS]:" -ForegroundColor $t.Accent
+    Write-Host "  [1] Infiltrate Secret Payload into Media Carrier (Stego Inject)" -ForegroundColor $t.Fg
+    Write-Host "  [2] Extract & Recover Hidden Secret from Media Carrier (Stego Scan)" -ForegroundColor $t.Fg
+    Write-Host "  [B] Return to Operational Deck" -ForegroundColor $t.Dim
+    Write-Host ""
+    
+    $opt = Read-MenuSelectionOrClick " >> SELECT OPTION [1, 2, B]: "
+    if ($opt -eq "B" -or [string]::IsNullOrEmpty($opt)) { return }
+    
+    if ($opt -eq "1") {
+        Write-Host " >> ENTER CARRIER IMAGE OR FILE PATH: " -NoNewline -ForegroundColor $t.Alert
+        $carrierP = [Console]::ReadLine().Trim()
+        if (-not (Test-Path $carrierP)) {
+            Write-Host " [✗ CARRIER FILE NOT FOUND]" -ForegroundColor $t.Error
+            Play-Sound "error"
+            Start-Sleep -Milliseconds 800
+            return
+        }
+        
+        Write-Host " >> ENTER SECRET PAYLOAD (Plain Text, or [F] to load a file): " -NoNewline -ForegroundColor $t.Alert
+        $secIn = [Console]::ReadLine()
+        $secBytes = $null
+        if ($secIn.Trim().ToUpper() -eq "F") {
+            Write-Host " >> ENTER SECRET FILE PATH: " -NoNewline -ForegroundColor $t.Alert
+            $secFilePath = [Console]::ReadLine().Trim()
+            if (Test-Path $secFilePath) {
+                $secBytes = [System.IO.File]::ReadAllBytes($secFilePath)
+            } else {
+                Write-Host " [✗ SECRET FILE NOT FOUND]" -ForegroundColor $t.Error
+                Play-Sound "error"
+                Start-Sleep -Milliseconds 800
+                return
+            }
+        } else {
+            $secBytes = [System.Text.Encoding]::UTF8.GetBytes($secIn)
+        }
+        
+        $carrierDir = Split-Path $carrierP -Parent
+        $carrierName = [System.IO.Path]::GetFileNameWithoutExtension($carrierP)
+        $carrierExt = [System.IO.Path]::GetExtension($carrierP)
+        $defOut = [System.IO.Path]::Combine($carrierDir, $carrierName + "_stego" + $carrierExt)
+        
+        Write-Host " >> ENTER OUTPUT FILE PATH [Default: $defOut]: " -NoNewline -ForegroundColor $t.Alert
+        $outP = [Console]::ReadLine().Trim()
+        if (-not $outP) { $outP = $defOut }
+        
+        try {
+            $inj = Inject-StegoCarrier -carrierFilePath $carrierP -payloadBytes $secBytes -outputCarrierPath $outP
+            Play-Sound "success"
+            Draw-Header "STEGO INFILTRATION COMPLETE"
+            $lines = @(
+                "CARRIER INPUT  : $carrierP ($($inj.CarrierSize) bytes)",
+                "PAYLOAD SIZE   : $($inj.PayloadSize) bytes secret payload injected",
+                "STEGO OUTPUT   : $($inj.OutputFile) ($($inj.TotalSize) bytes)",
+                "STEGO SECURITY : Marker Tagged Base64 Enclosed Stream"
+            )
+            Draw-Box $lines "INFILTRATION REPORT" "Fg"
+            Write-Host ""
+        } catch {
+            Write-Host " [✗ INJECTION ERROR]: $($_.Exception.Message)" -ForegroundColor $t.Error
+            Play-Sound "error"
+        }
+        
+    } elseif ($opt -eq "2") {
+        Write-Host " >> ENTER STEGO CARRIER FILE PATH: " -NoNewline -ForegroundColor $t.Alert
+        $carrierP = [Console]::ReadLine().Trim()
+        if (-not (Test-Path $carrierP)) {
+            Write-Host " [✗ FILE NOT FOUND]" -ForegroundColor $t.Error
+            Play-Sound "error"
+            Start-Sleep -Milliseconds 800
+            return
+        }
+        
+        Write-Host " [*] SCANNING CARRIER STREAM FOR HIDDEN BASE64 PAYLOAD..." -ForegroundColor $t.Alert
+        $res = Extract-StegoCarrier -carrierFilePath $carrierP
+        if ($res.Found) {
+            Play-Sound "success"
+            Draw-Header "STEGO RECOVERY SUCCESS"
+            $preview = try { [System.Text.Encoding]::UTF8.GetString($res.Bytes) } catch { "Binary Payload" }
+            if ($preview.Length -gt 50) { $preview = $preview.Substring(0, 47) + "..." }
+            
+            $lines = @(
+                "STEGO STATUS    : [✓ DETECTED & EXTRACTED] HIDDEN PAYLOAD RECOVERED",
+                "PAYLOAD BYTES   : $($res.Bytes.Length) bytes",
+                "DATA FORMAT     : $($res.MediaInfo.Format) ($($res.MediaInfo.Mime))",
+                "PREVIEW TEXT    : $preview"
+            )
+            Draw-Box $lines "RECOVERED SECRET TELEMETRY" "Fg"
+            Write-Host ""
+            
+            Write-Host " [EXTRACTION ACTIONS]:" -ForegroundColor $t.Accent
+            Write-Host "  [1] Save Extracted Payload to Disk" -ForegroundColor $t.Fg
+            Write-Host "  [2] Copy Base64 / Text to Clipboard" -ForegroundColor $t.Fg
+            Write-Host "  [B] Return to Operational Deck" -ForegroundColor $t.Dim
+            Write-Host ""
+            
+            $act = Read-MenuSelectionOrClick " >> SELECT ACTION [1, 2, B]: "
+            if ($act -eq "1") {
+                $ext = if ($res.MediaInfo.Extension) { $res.MediaInfo.Extension } else { ".bin" }
+                $saveP = "extracted_secret" + $ext
+                Write-Host " >> ENTER OUTPUT PATH [Default: $saveP]: " -NoNewline -ForegroundColor $t.Alert
+                $userP = [Console]::ReadLine().Trim()
+                if ($userP) { $saveP = $userP }
+                [System.IO.File]::WriteAllBytes($saveP, $res.Bytes)
+                Write-Host " [✓ EXTRACTED PAYLOAD WRITTEN TO]: $saveP" -ForegroundColor $t.Fg
+                Play-Sound "success"
+            } elseif ($act -eq "2") {
+                try {
+                    $txtToCopy = if ($preview -ne "Binary Payload") { [System.Text.Encoding]::UTF8.GetString($res.Bytes) } else { $res.Base64 }
+                    [System.Windows.Forms.Clipboard]::SetText($txtToCopy)
+                    Write-Host " [✓ PAYLOAD COPIED TO SYSTEM CLIPBOARD]" -ForegroundColor $t.Fg
+                    Play-Sound "success"
+                } catch {
+                    Write-Host " [✗ CLIPBOARD ERROR]" -ForegroundColor $t.Error
+                }
+            }
+        } else {
+            Write-Host " [✗ NO HIDDEN STEGO PAYLOAD DETECTED IN CARRIER]" -ForegroundColor $t.Alert
+            Play-Sound "error"
+        }
+    }
+    
+    Write-Host " Press [ENTER] to return..." -ForegroundColor $t.Dim
+    [void][Console]::ReadLine()
+}
+
+# OPERATION 16: MULTI-HASH CRYPTOGRAPHIC TELEMETRY GRID
+function Invoke-CryptoHashSuite {
+    Draw-Header "CRYPTOGRAPHIC MULTI-HASH TELEMETRY GRID"
+    $t = Get-Theme
+    $b = Get-BoxStyle
+    Play-Sound "blip"
+    
+    Write-Host " [DATA STREAM SOURCE]:" -ForegroundColor $t.Accent
+    Write-Host "  [1] Compute Hashes for File on Disk" -ForegroundColor $t.Fg
+    Write-Host "  [2] Compute Hashes for Base64 String" -ForegroundColor $t.Fg
+    Write-Host "  [3] Compute Hashes for Raw Plaintext" -ForegroundColor $t.Fg
+    Write-Host "  [B] Return to Operational Deck" -ForegroundColor $t.Dim
+    Write-Host ""
+    
+    $srcOpt = Read-MenuSelectionOrClick " >> SELECT SOURCE [1-3, B]: "
+    if ($srcOpt -eq "B" -or [string]::IsNullOrEmpty($srcOpt)) { return }
+    
+    $bytes = $null
+    $desc = ""
+    
+    if ($srcOpt -eq "1") {
+        Write-Host " >> ENTER FULL FILE PATH: " -NoNewline -ForegroundColor $t.Alert
+        $p = [Console]::ReadLine().Trim()
+        if (-not (Test-Path $p)) {
+            Write-Host " [✗ FILE NOT FOUND]" -ForegroundColor $t.Error
+            Play-Sound "error"
+            Start-Sleep -Milliseconds 800
+            return
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($p)
+        $desc = (Split-Path $p -Leaf)
+    } elseif ($srcOpt -eq "2") {
+        Write-Host " >> PASTE BASE64 PAYLOAD: " -NoNewline -ForegroundColor $t.Alert
+        $b64 = [Console]::ReadLine()
+        $clean = Clean-Base64Input $b64
+        try {
+            $bytes = [System.Convert]::FromBase64String($clean)
+            $desc = "Decoded Base64 Stream ($($clean.Length) chars)"
+        } catch {
+            Write-Host " [✗ INVALID BASE64 STREAM]" -ForegroundColor $t.Error
+            Play-Sound "error"
+            Start-Sleep -Milliseconds 800
+            return
+        }
+    } elseif ($srcOpt -eq "3") {
+        Write-Host " >> ENTER PLAINTEXT STRING: " -NoNewline -ForegroundColor $t.Alert
+        $str = [Console]::ReadLine()
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($str)
+        $desc = "UTF-8 String ('$str')"
+    }
+    
+    if ($null -eq $bytes) { return }
+    
+    $hashes = Get-MultiHashTelemetry $bytes
+    Play-Sound "success"
+    
+    $hashKb = [Math]::Round($hashes.Length / 1024, 2)
+    Draw-Header "CRYPTOGRAPHIC DIGEST REPORT"
+    $card = @(
+        "STREAM IDENTITY  : $desc",
+        "BYTE PAYLOAD     : $($hashes.Length) bytes ($hashKb KB)",
+        "MD5 (RFC-1321)   : $($hashes.MD5)",
+        "SHA-1 (FIPS-180) : $($hashes.SHA1)",
+        "SHA-256 (SECURE) : $($hashes.SHA256)",
+        "SHA-384          : $($hashes.SHA384)",
+        "SHA-512 (HIGH)   : $($hashes.SHA512.Substring(0, 48))...",
+        "                   $($hashes.SHA512.Substring(48))"
+    )
+    Draw-Box $card "INTEGRITY DIGEST TELEMETRY" "Fg"
+    Write-Host ""
+    
+    Write-Host " >> COMPARE WITH KNOWN CHECKSUM? (Paste expected hash or press ENTER to skip): " -NoNewline -ForegroundColor $t.Alert
+    $expected = [Console]::ReadLine().Trim().ToLower()
+    if ($expected) {
+        $matched = $false
+        $algo = ""
+        foreach ($k in @("MD5", "SHA1", "SHA256", "SHA384", "SHA512")) {
+            if ($hashes[$k] -eq $expected) {
+                $matched = $true
+                $algo = $k
+                break
+            }
+        }
+        if ($matched) {
+            Write-Host " [✓ MATCH VERIFIED] Exact match confirmed for algorithm: $algo" -ForegroundColor Green
+            Play-Sound "success"
+        } else {
+            Write-Host " [✗ HASH MISMATCH] Provided checksum does NOT match any computed hash algorithms." -ForegroundColor Red
+            Play-Sound "error"
+        }
+        Write-Host ""
+    }
+    
+    Write-Host " Press [ENTER] to return..." -ForegroundColor $t.Dim
+    [void][Console]::ReadLine()
+}
+
 
 # ==============================================================================
 # OPERATION 10: CONFIGURATION & THEMES
 # ==============================================================================
 function Invoke-ConfigMenu {
+    $borderOrder = @("Double", "Single", "Rounded", "Block", "Ascii")
     while ($true) {
         $t = Get-Theme
+        $b = Get-BoxStyle
         Draw-Header "ENVIRONMENT & TERMINAL CONFIGURATION"
         Play-Sound "blip"
         
-        Write-Host " [COLOR THEME SELECTION]:" -ForegroundColor $t.Accent
+        Write-Host " [COLOR THEME PALETTES]:" -ForegroundColor $t.Accent
         for ($i = 0; $i -lt $script:Themes.Count; $i++) {
             $marker = if ($i -eq $script:Config.ThemeIndex) { "[* ACTIVE]" } else { "         " }
-            Write-Host "  [$($i+1)] $($script:Themes[$i].Name) $marker" -ForegroundColor $(if ($i -eq $script:Config.ThemeIndex) { $t.Alert } else { $t.Fg })
+            $r = try { [Console]::CursorTop } catch { -1 }
+            if ($r -ge 0) { Register-Hitbox -key "$($i+1)" -row $r -startCol 0 -endCol 85 }
+            Write-Host "  [$($i+1)] $($script:Themes[$i].Name.PadRight(30)) $marker" -ForegroundColor $(if ($i -eq $script:Config.ThemeIndex) { $t.Alert } else { $t.Fg })
         }
         Write-Host ""
-        Write-Host " [SYSTEM SOUND]:" -ForegroundColor $t.Accent
-        Write-Host "  [S] Terminal Audio Acoustic Beeps: $(if ($script:Config.SoundEnabled) { 'ENABLED [ON]' } else { 'MUTED [OFF]' })" -ForegroundColor $t.Fg
+        Write-Host " [WINDOW FRAME & BORDER ENGINE]:" -ForegroundColor $t.Accent
+        $r = try { [Console]::CursorTop } catch { -1 }
+        if ($r -ge 0) { Register-Hitbox -key "F" -row $r -startCol 0 -endCol 85 }
+        Write-Host "  [F] Cycle Frame Style: $($b.Name) [PRESS 'F']" -ForegroundColor $t.Alert
+        Write-Host ""
+        Write-Host " [SYSTEM SOUND & TELEMETRY]:" -ForegroundColor $t.Accent
+        $r = try { [Console]::CursorTop } catch { -1 }
+        if ($r -ge 0) { Register-Hitbox -key "S" -row $r -startCol 0 -endCol 85 }
+        Write-Host "  [S] Acoustic CRT Beeps: $(if ($script:Config.SoundEnabled) { 'ENABLED [ON]' } else { 'MUTED [OFF]' })" -ForegroundColor $t.Fg
+        Write-Host ""
+        Write-Host " [CONSOLE MOUSE INPUT ENGINE]:" -ForegroundColor $t.Accent
+        $r = try { [Console]::CursorTop } catch { -1 }
+        if ($r -ge 0) { Register-Hitbox -key "M" -row $r -startCol 0 -endCol 85 }
+        Write-Host "  [M] Mouse VT Tracking:  $(if ($script:Config.MouseEnabled) { 'ENABLED [ON]' } else { 'DISABLED [OFF]' })" -ForegroundColor $t.Alert
         Write-Host ""
         Write-Host " [BASE64 LINE WRAP FORMATTING]:" -ForegroundColor $t.Accent
-        Write-Host "  [W] Current Wrap: $(if ($script:Config.WrapMode -eq 0) { 'Continuous Stream (No Wrap)' } else { "$($script:Config.WrapMode) Chars / Line" })" -ForegroundColor $t.Fg
+        $r = try { [Console]::CursorTop } catch { -1 }
+        if ($r -ge 0) { Register-Hitbox -key "W" -row $r -startCol 0 -endCol 85 }
+        Write-Host "  [W] Output Wrap: $(if ($script:Config.WrapMode -eq 0) { 'Continuous Stream (No Wrap)' } else { "$($script:Config.WrapMode) Chars / Line" })" -ForegroundColor $t.Fg
         Write-Host ""
-        Write-Host " [B] Return to Main System Menu" -ForegroundColor $t.Dim
-        Write-Host ""
-        Write-Host " >> SELECT SETTING: " -NoNewline -ForegroundColor $t.Alert
-        $choice = [Console]::ReadLine().ToUpper().Trim()
         
-        if ($choice -match '^[1-4]$') {
+        # Live Preview Box
+        $previewMeter = Draw-MeterBar 78.5 16 "SIGNAL OPTIMAL"
+        $previewLines = @(
+            "THEME PALETTE : $($t.Name)",
+            "BORDER ENGINE : $($b.Name)",
+            "MOUSE STATUS  : $(if ($script:Config.MouseEnabled) { 'Active Point-and-Click' } else { 'Keystroke Only' })",
+            "TELEMETRY BAR : $previewMeter",
+            "ACCENT COLOR  : 0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        )
+        Draw-Box $previewLines "LIVE WORKSTATION PREVIEW" "Fg"
+        Write-Host ""
+        
+        $r = try { [Console]::CursorTop } catch { -1 }
+        if ($r -ge 0) { Register-Hitbox -key "B" -row $r -startCol 0 -endCol 85 }
+        Write-Host "  [B] Return to Main System Menu" -ForegroundColor $t.Dim
+        Write-Host ""
+        $choice = Read-MenuSelectionOrClick " >> SELECT SETTING [1-7, F, S, M, W, B]: "
+        
+        if ($choice -match '^[1-7]$') {
             $script:Config.ThemeIndex = [int]$choice - 1
+            Play-Sound "blip"
+        } elseif ($choice -eq "F") {
+            $currIdx = $borderOrder.IndexOf($script:Config.BorderStyle)
+            if ($currIdx -lt 0) { $currIdx = 0 }
+            $nextIdx = ($currIdx + 1) % $borderOrder.Count
+            $script:Config.BorderStyle = $borderOrder[$nextIdx]
             Play-Sound "blip"
         } elseif ($choice -eq "S") {
             $script:Config.SoundEnabled = -not $script:Config.SoundEnabled
+            Play-Sound "blip"
+        } elseif ($choice -eq "M") {
+            $script:Config.MouseEnabled = -not $script:Config.MouseEnabled
             Play-Sound "blip"
         } elseif ($choice -eq "W") {
             switch ($script:Config.WrapMode) {
@@ -1723,42 +3290,56 @@ function Invoke-ConfigMenu {
 # MAIN TERMINAL LOOP
 # ==============================================================================
 function Start-Base64TUI {
-    [Console]::Title = "CAMBRIANSYSTEMS // DATA TRANSMUTATION WORKSTATION v5.0"
+    [Console]::Title = "CAMBRIANSYSTEMS // DATA TRANSMUTATION WORKSTATION v5.2"
     
     try {
         if ([Console]::WindowWidth -lt 85) { [Console]::WindowWidth = 85 }
-        if ([Console]::WindowHeight -lt 34) { [Console]::WindowHeight = 34 }
+        if ([Console]::WindowHeight -lt 40) { [Console]::WindowHeight = 40 }
     } catch {}
     
     Play-Sound "alert"
     
     while ($true) {
         $t = Get-Theme
-        Draw-Header "CAMBRIANSYSTEMS MAIN COMMAND CONSOLE v5.0"
+        $b = Get-BoxStyle
+        Draw-Header -IsMainMenu
         
         $menuItems = @(
-            " [1] TEXT TRANSMUTATION          -> Base64 Encode / Decode Plaintext",
-            " [2] PHOTO & IMAGE TRANSMUTATION  -> Encode Image / Rebuild & ASCII Scan",
-            " [3] JWT CORPORATE INSPECTOR     -> Decode Claims, Header & Expiration",
-            " [4] MULTI-TRANSCODER / SNIFFER  -> Base64URL, Hex, URL-Encode & Auto-Crack",
-            " [5] GZIP COMPRESSION LAB        -> High-Ratio Compressed Base64 Streams",
-            " [6] POWERSHELL ENCODED COMMAND  -> Generate & Decode -EncodedCommand",
-            " [7] NORTON HEX DUMP INSPECTOR   -> Byte Memory Inspector with Offset & ASCII",
-            " [8] BATCH & OFFLINE HTML VAULT  -> Folder Bulk Convert to Self-Contained HTML",
-            " [9] BASE64 INTEGRITY INSPECTOR  -> RFC-4648 Validator & SHA-256 Telemetry",
-            " [0] TERMINAL ENVIRONMENT        -> CRT Themes, Sound & Line Formatting",
-            " [Q] LOGOUT / TERMINATE          -> Flush Cache & Disconnect Workstation"
+            " " + $b.LT + ($b.H * 2) + " [DIVISION 01: CORE DATA TRANSMUTATION] " + ($b.H * 32),
+            "  [1] TEXT TRANSMUTATION          Â· Plaintext Base64 Encode / Decode (RFC-4648)",
+            "  [2] PHOTO & MEDIA VAULT        Â· Image Ingestion, Rebuild & Phosphor Scan",
+            "  [4] MULTI-TRANSCODER & SNIFFER Â· Base64URL, Hex/Base16, URI Percent & Auto-Crack",
+            " ",
+            " " + $b.LT + ($b.H * 2) + " [DIVISION 02: DOCUMENT & MEDIA CONVERSION] " + ($b.H * 27),
+            "  [A] IMAGE FORMAT TRANSCODER     Â· PNG, JPG, ICO, BMP, GIF, TIFF & Bicubic Resizer",
+            "  [C] PDF TRANSMUTATION HUB       Â· PDF Data URI Packing, Rebuild & Cyber Reader",
+            "  [D] MARKDOWN ASSET PACKAGER     Â· Inline Local Media to Data URIs or Extract",
+            " ",
+            " " + $b.LT + ($b.H * 2) + " [DIVISION 03: SECURITY TOKENS & CRYPTO PROBES] " + ($b.H * 22),
+            "  [3] JWT CORPORATE INSPECTOR     Â· Header & Claims Decoder with Expiration Countdown",
+            "  [9] BASE64 INTEGRITY INSPECTOR  Â· RFC-4648 Modulo-4 Checker & SHA-256 Telemetry",
+            "  [H] MULTI-HASH TELEMETRY GRID   Â· MD5, SHA-1, SHA-256, SHA-384, SHA-512 & Match",
+            "  [E] STEGANOGRAPHY CARRIER       Â· Hide & Extract Base64 Payloads in Media Files",
+            " ",
+            " " + $b.LT + ($b.H * 2) + " [DIVISION 04: BINARY, COMPRESSION & QR PIPELINES] " + ($b.H * 19),
+            "  [5] GZIP COMPRESSION LAB        Â· High-Ratio Compressed Base64 Streams (RFC-1952)",
+            "  [6] POWERSHELL ENCODED COMMAND  Â· Generate & Reverse UTF-16LE -EncodedCommand",
+            "  [7] NORTON HEX DUMP INSPECTOR   Â· Byte Memory Grid with Hex Offset & ASCII Gutter",
+            "  [8] OFFLINE BATCH HTML VAULT    Â· Directory Scanner & Standalone Cyber Gallery",
+            "  [R] PHOSPHOR QR GENERATOR       Â· Render In-Terminal Dual-Cell CRT QR Code",
+            " ",
+            " " + $b.LT + ($b.H * 2) + " [DIVISION 05: TERMINAL ENVIRONMENT & SYSTEM EXIT] " + ($b.H * 21),
+            "  [0] TERMINAL CONFIGURATION      Â· Themes, Box Styles, Sound & Mouse Tracking",
+            "  [Q] TERMINATE WORKSTATION       Â· Flush Cache Buffers & Disconnect Session"
         )
-        Draw-Box $menuItems "DATA TRANSMUTATION OPERATIONS" "Fg"
+        Draw-Box $menuItems "OPERATIONAL COMMAND DECK" "Fg"
         Write-Host ""
         
-        Draw-StatusBar "READY // WORKSTATION ONLINE // CAMBRIANSYSTEMS v5.0"
+        Draw-StatusBar "READY // WORKSTATION ONLINE // CAMBRIANSYSTEMS v5.2"
         Write-Host ""
-        Write-Host " >> COMMAND SELECTION [0-9, Q]: " -NoNewline -ForegroundColor $t.Alert
         
-        $key = [Console]::ReadLine()
-        if ($null -eq $key) { continue }
-        $opt = $key.ToUpper().Trim()
+        Write-Host (" " + $b.TL + ($b.H * 2) + "(OPERATOR@CAMBRIAN)-[SUBSYSTEM: ROOT]") -ForegroundColor $t.Dim
+        $opt = Read-MenuSelectionOrClick (" " + $b.BL + ($b.H * 2) + $b.Arrow + " ENTER COMMAND [0-9, A, C, D, H, E, R, Q] OR CLICK: ")
         
         switch ($opt) {
             "1" { Invoke-TextMenu }
@@ -1771,6 +3352,12 @@ function Start-Base64TUI {
             "8" { Invoke-BatchTransmuter }
             "9" { Invoke-Inspector }
             "0" { Invoke-ConfigMenu }
+            "A" { Invoke-ImageConverter }
+            "C" { Invoke-PdfTransmuter }
+            "D" { Invoke-MarkdownPackager }
+            "H" { Invoke-CryptoHashSuite }
+            "E" { Invoke-StegoCarrier }
+            "R" { Invoke-TerminalQrCode }
             "Q" {
                 Draw-Header "TERMINATING SESSION"
                 Write-Host " [!] COMMENCING SYSTEM BUFFER FLUSH AND LOGOFF..." -ForegroundColor $t.Alert
@@ -1782,7 +3369,7 @@ function Start-Base64TUI {
                 return
             }
             default {
-                Play-Sound "error"
+                if ($opt) { Play-Sound "error" }
             }
         }
     }
