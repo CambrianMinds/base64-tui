@@ -324,5 +324,5 @@ powershell -ExecutionPolicy Bypass -File .\test_suite.ps1
 
 ## 7. LICENSE & CREDITS
 
-Developed by **CambrianSystems / CambrianMinds**.  
+Developed by **Justin Bogner** with **Cambrian Minds**.  
 Released under the [MIT License](LICENSE).

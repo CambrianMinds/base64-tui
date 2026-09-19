@@ -1,8 +1,10 @@
 ﻿<#
 .SYNOPSIS
-    CAMBRIANSYSTEMS // DATA TRANSMUTATION RELAY CONSOLE (BASE64-TUI v5.2)
+    CAMBRIANSYSTEMS // DATA TRANSMUTATION RELAY CONSOLE (CAMBRIANSYSTEMS-TUI v5.2)
     Retro-Corporate Terminal & Security Workstation
     RFC 4648 / MIME Base64 / JWT / Base64URL / Hex / GZip / PS-EncodedCommand / HexDump
+.AUTHOR
+    Justin Bogner with Cambrian Minds
 #>
 
 # Ensure UTF-8 Console Output Encoding
