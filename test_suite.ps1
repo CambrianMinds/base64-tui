@@ -1,4 +1,4 @@
-# Automated Comprehensive Test Suite for base64-tui.ps1 v5.2
+# Automated Comprehensive Test Suite for cambriansystems-tui.ps1 v5.2
 $ErrorActionPreference = "Stop"
 try {
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -8,8 +8,9 @@ try {
 Write-Host ">>> Commencing CambrianSystems Workstation v5.2 Engine Tests..." -ForegroundColor Cyan
 
 # Source functions without running the main interactive loop
-$content = [System.IO.File]::ReadAllText("d:\tools\base64-tui\base64-tui.ps1", [System.Text.Encoding]::UTF8)
-$functionsOnly = $content -replace '(?ms)^Start-Base64TUI\s*$', ''
+$targetScript = if (Test-Path "$PSScriptRoot\cambriansystems-tui.ps1") { "$PSScriptRoot\cambriansystems-tui.ps1" } else { "$PSScriptRoot\base64-tui.ps1" }
+$content = [System.IO.File]::ReadAllText($targetScript, [System.Text.Encoding]::UTF8)
+$functionsOnly = $content -replace '(?ms)^Start-(CambrianSystems|Base64)TUI\s*$', ''
 Invoke-Expression $functionsOnly
 
 # Test 1: Clean-Base64Input
@@ -155,8 +156,8 @@ if ($pdfInfo.Valid -and $pdfInfo.Version -eq "1.7" -and $pdfInfo.PageCount -eq 5
 
 # Test 13: Markdown Asset Packager (Inline Data URIs) & Unpack
 Write-Host "Test 13: Markdown Asset Packager & Unpacker Roundtrip... " -NoNewline
-$mdTest = "d:\tools\base64-tui\test_suite_temp.md"
-$imgTest = "d:\tools\base64-tui\test_suite_asset.png"
+$mdTest = "$PSScriptRoot\test_suite_temp.md"
+$imgTest = "$PSScriptRoot\test_suite_asset.png"
 [System.IO.File]::WriteAllBytes($imgTest, $imgB)
 [System.IO.File]::WriteAllText($mdTest, "# Test Document`n`n![Sample Asset](test_suite_asset.png)`n", [System.Text.Encoding]::UTF8)
 
@@ -167,7 +168,7 @@ $packOk = ($packRes.ImagesInlined -eq 1 -and (Test-Path $packRes.TargetFile))
 $unpackOk = ($unpackRes.ImagesExtracted -eq 1 -and (Test-Path $unpackRes.TargetFile))
 
 Remove-Item $mdTest, $imgTest, $packRes.TargetFile, $unpackRes.TargetFile -ErrorAction SilentlyContinue
-if (Test-Path "d:\tools\base64-tui\assets") { Remove-Item "d:\tools\base64-tui\assets" -Recurse -Force -ErrorAction SilentlyContinue }
+if (Test-Path "$PSScriptRoot\assets") { Remove-Item "$PSScriptRoot\assets" -Recurse -Force -ErrorAction SilentlyContinue }
 
 if ($packOk -and $unpackOk) {
     Write-Host "[PASS] (Inlined & Unpacked successfully)" -ForegroundColor Green
@@ -186,8 +187,8 @@ if ($qrMatrix.GetLength(0) -eq 25 -and $qrMatrix.GetLength(1) -eq 25) {
 
 # Test 15: Digital Steganography Carrier
 Write-Host "Test 15: Digital Steganography Carrier (Inject & Recover)... " -NoNewline
-$carrierFile = "d:\tools\base64-tui\carrier_suite.bin"
-$stegoFile = "d:\tools\base64-tui\stego_suite.bin"
+$carrierFile = "$PSScriptRoot\carrier_suite.bin"
+$stegoFile = "$PSScriptRoot\stego_suite.bin"
 [System.IO.File]::WriteAllBytes($carrierFile, $imgB)
 $secretPayload = [System.Text.Encoding]::UTF8.GetBytes("CAMBRIAN_CLASSIFIED_STEGO_2026")
 

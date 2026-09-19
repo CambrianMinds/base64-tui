@@ -1,0 +1,33 @@
+# Temporary test suite artifacts
+test_suite_temp.md
+test_suite_asset.png
+test_suite_unpacked.md
+test_suite_temp_packed.md
+carrier_suite.bin
+stego_suite.bin
+assets/
+
+# Generated gallery and reader exports
+cambriansystems_offline_gallery.html
+*_reader.html
+*_packed.md
+*_unpacked.md
+
+# Scratch & debug files
+scratch_*.ps1
+scratch_*.bat
+scratch_*.cmd
+*.tmp
+*.bak
+*.log
+
+# Windows system files
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Editor & IDE configurations
+.vscode/
+.idea/
+*.suo
+*.user
