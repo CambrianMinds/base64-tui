@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     CAMBRIANSYSTEMS // DATA TRANSMUTATION RELAY CONSOLE (CAMBRIANSYSTEMS-TUI v5.2)
     Retro-Corporate Terminal & Security Workstation
@@ -18,6 +18,21 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.IO.Compression
 
+# Maximize the console window
+try {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32 {
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+}
+"@
+    [Win32]::ShowWindow([Win32]::GetConsoleWindow(), 3) | Out-Null
+} catch {}
+
 # Win32 Console Mouse & QR Code Engine
 $helperCSharp = @"
 using System;
@@ -26,9 +41,12 @@ using System.Runtime.InteropServices;
 
 public class ConsoleMouseHelper {
     private const int STD_INPUT_HANDLE = -10;
+    private const int STD_OUTPUT_HANDLE = -11;
     private const uint ENABLE_MOUSE_INPUT = 0x0010;
     private const uint ENABLE_EXTENDED_FLAGS = 0x0080;
     private const uint ENABLE_QUICK_EDIT_MODE = 0x0040;
+    private const uint ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
+    private const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr GetStdHandle(int nStdHandle);
@@ -39,17 +57,25 @@ public class ConsoleMouseHelper {
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 
-    private static uint _origMode;
+    private static uint _origInMode;
+    private static uint _origOutMode;
     private static bool _initialized = false;
 
     public static bool EnableMouse() {
         try {
-            IntPtr handle = GetStdHandle(STD_INPUT_HANDLE);
-            if (!GetConsoleMode(handle, out _origMode)) return false;
-            uint newMode = (_origMode | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS) & ~ENABLE_QUICK_EDIT_MODE;
-            bool ok = SetConsoleMode(handle, newMode);
-            _initialized = ok;
-            return ok;
+            IntPtr hIn = GetStdHandle(STD_INPUT_HANDLE);
+            IntPtr hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+            if (!GetConsoleMode(hIn, out _origInMode)) return false;
+            if (!GetConsoleMode(hOut, out _origOutMode)) return false;
+            
+            uint newInMode = (_origInMode | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS) & ~(ENABLE_QUICK_EDIT_MODE | ENABLE_VIRTUAL_TERMINAL_INPUT);
+            uint newOutMode = _origOutMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+            
+            bool ok1 = SetConsoleMode(hIn, newInMode);
+            bool ok2 = SetConsoleMode(hOut, newOutMode);
+            
+            _initialized = ok1 && ok2;
+            return _initialized;
         } catch {
             return false;
         }
@@ -58,8 +84,8 @@ public class ConsoleMouseHelper {
     public static void DisableMouse() {
         if (_initialized) {
             try {
-                IntPtr handle = GetStdHandle(STD_INPUT_HANDLE);
-                SetConsoleMode(handle, _origMode);
+                SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), _origInMode);
+                SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), _origOutMode);
                 _initialized = false;
             } catch {}
         }
@@ -198,91 +224,38 @@ function Read-MenuSelectionOrClick {
     $t = Get-Theme
     Write-Host $prompt -NoNewline -ForegroundColor $t.Alert
     
-    if (-not $script:Config.MouseEnabled) {
-        $in = [Console]::ReadLine()
-        if ($null -eq $in) { return "" } else { return $in.ToUpper().Trim() }
-    }
+    $lastW = [Console]::WindowWidth
+    $lastH = [Console]::WindowHeight
     
-    try {
-        if ([Console]::IsInputRedirected -or (-not [Environment]::UserInteractive)) {
+    $inputBuffer = ""
+    while ($true) {
+        try {
+            if ($lastW -ne [Console]::WindowWidth -or $lastH -ne [Console]::WindowHeight) {
+                return "RESIZE"
+            }
+            if ([Console]::KeyAvailable) {
+                $keyInfo = [Console]::ReadKey($true)
+                if ($keyInfo.Key -eq [ConsoleKey]::Enter) {
+                    Write-Host ""
+                    return $inputBuffer.ToUpper().Trim()
+                } elseif ($keyInfo.Key -eq [ConsoleKey]::Backspace) {
+                    if ($inputBuffer.Length -gt 0) {
+                        $inputBuffer = $inputBuffer.Substring(0, $inputBuffer.Length - 1)
+                        try { [Console]::CursorLeft = [Console]::CursorLeft - 1; Write-Host " " -NoNewline; [Console]::CursorLeft = [Console]::CursorLeft - 1 } catch {}
+                    }
+                } else {
+                    $char = $keyInfo.KeyChar
+                    if ([char]::IsControl($char) -eq $false) {
+                        $inputBuffer += $char
+                        Write-Host $char -NoNewline -ForegroundColor $t.Alert
+                    }
+                }
+            }
+        } catch {
             $in = [Console]::ReadLine()
             if ($null -eq $in) { return "" } else { return $in.ToUpper().Trim() }
         }
-    } catch {
-        $in = [Console]::ReadLine()
-        if ($null -eq $in) { return "" } else { return $in.ToUpper().Trim() }
-    }
-    
-    try {
-        [ConsoleMouseHelper]::EnableMouse()
-        $ESC = [char]27
-        Write-Host "$ESC[?1000h$ESC[?1006h" -NoNewline
-    } catch {}
-    
-    try {
-        while ($true) {
-            $hasKey = $false
-            try {
-                $hasKey = [Console]::KeyAvailable
-            } catch {
-                $in = [Console]::ReadLine()
-                if ($null -eq $in) { return "" } else { return $in.ToUpper().Trim() }
-            }
-            if ($hasKey) {
-                $keyInfo = [Console]::ReadKey($true)
-                
-                # Check for VT SGR Mouse Sequence: \e[<0;x;yM
-                if ($keyInfo.Key -eq [ConsoleKey]::Escape) {
-                    Start-Sleep -Milliseconds 25
-                    if ([Console]::KeyAvailable) {
-                        $seq = ""
-                        while ([Console]::KeyAvailable) {
-                            $seq += [Console]::ReadKey($true).KeyChar
-                        }
-                        if ($seq -match '^\[<(\d+);(\d+);(\d+)([Mm])') {
-                            $btn = [int]$matches[1]
-                            $col = [int]$matches[2]
-                            $row = [int]$matches[3]
-                            $isPress = ($matches[4] -eq 'M')
-                            
-                            if ($isPress -and $btn -eq 0) {
-                                foreach ($hb in $script:Hitboxes) {
-                                    if ($row -eq $hb.Row -and $col -ge $hb.StartCol -and $col -le $hb.EndCol) {
-                                        Play-Sound "blip"
-                                        Write-Host " [CLICK: $($hb.Key)]" -ForegroundColor $t.Alert
-                                        Start-Sleep -Milliseconds 120
-                                        return $hb.Key
-                                    }
-                                }
-                            }
-                            continue
-                        }
-                    } else {
-                        return "B"
-                    }
-                }
-                
-                if ($keyInfo.Key -eq [ConsoleKey]::Enter) {
-                    Write-Host ""
-                    return ""
-                }
-                
-                $char = $keyInfo.KeyChar.ToString().ToUpper()
-                if ($char) {
-                    Write-Host $char -ForegroundColor $t.Alert
-                    Play-Sound "blip"
-                    Start-Sleep -Milliseconds 80
-                    return $char
-                }
-            }
-            Start-Sleep -Milliseconds 30
-        }
-    } finally {
-        try {
-            $ESC = [char]27
-            Write-Host "$ESC[?1000l$ESC[?1006l" -NoNewline
-            [ConsoleMouseHelper]::DisableMouse()
-        } catch {}
+        Start-Sleep -Milliseconds 15
     }
 }
 
@@ -2909,7 +2882,7 @@ function Invoke-TerminalQrCode {
             Write-Host ("  " * $quiet) -NoNewline -ForegroundColor $t.Bg -BackgroundColor White
             for ($c = 0; $c -lt $size; $c++) {
                 if ($matrix[$r, $c]) {
-                    Write-Host ([char]0x2588 + [char]0x2588) -NoNewline -ForegroundColor Black -BackgroundColor Black
+                    Write-Host "  " -NoNewline -BackgroundColor Black
                 } else {
                     Write-Host "  " -NoNewline -ForegroundColor White -BackgroundColor White
                 }
