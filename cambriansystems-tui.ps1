@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     CAMBRIANSYSTEMS // DATA TRANSMUTATION RELAY CONSOLE (CAMBRIANSYSTEMS-TUI v5.2)
     Retro-Corporate Terminal & Security Workstation
@@ -215,7 +215,8 @@ function Read-MenuSelectionOrClick {
     
     try {
         [ConsoleMouseHelper]::EnableMouse()
-        Write-Host "`e[?1000h`e[?1006h" -NoNewline
+        $ESC = [char]27
+        Write-Host "$ESC[?1000h$ESC[?1006h" -NoNewline
     } catch {}
     
     try {
@@ -278,7 +279,8 @@ function Read-MenuSelectionOrClick {
         }
     } finally {
         try {
-            Write-Host "`e[?1000l`e[?1006l" -NoNewline
+            $ESC = [char]27
+            Write-Host "$ESC[?1000l$ESC[?1006l" -NoNewline
             [ConsoleMouseHelper]::DisableMouse()
         } catch {}
     }

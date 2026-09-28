@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CambrianSystems TUI</title>
+    <meta name="description" content="Zero-Dependency PowerShell Workstation">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --term-bg: #0022cc;
+            --term-fg: #ffffff;
+            --term-cyan: #00ffff;
+            --term-dim: #a0a0a0;
+            --term-highlight: #ff00ff;
+        }
+
+        body {
+            background-color: #050510;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            font-family: 'Fira Code', monospace;
+            color: var(--term-fg);
+        }
+
+        .terminal-container {
+            background-color: var(--term-bg);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.8), 0 0 20px rgba(0,34,204,0.5);
+            width: 95%;
+            max-width: 1000px;
+            font-size: 14px;
+            line-height: 1.4;
+            overflow-x: auto;
+            position: relative;
+        }
+
+        .terminal-header {
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 25px;
+            background: #111;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            display: flex;
+            align-items: center;
+            padding: 0 15px;
+            color: #888;
+            font-size: 12px;
+        }
+
+        .terminal-content {
+            margin-top: 25px;
+            white-space: pre;
+        }
+
+        .cyan { color: var(--term-cyan); }
+        .white { color: var(--term-fg); }
+        .magenta { color: var(--term-highlight); }
+        .bg-cyan { background-color: var(--term-cyan); color: #000; }
+        .bold { font-weight: bold; }
+
+        .scanline {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.1) 50%, rgba(0,0,0,0.1));
+            background-size: 100% 4px;
+            pointer-events: none;
+            border-radius: 8px;
+        }
+
+        .cursor {
+            display: inline-block;
+            width: 8px;
+            height: 15px;
+            background-color: var(--term-highlight);
+            animation: blink 1s step-end infinite;
+            vertical-align: middle;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        .btn-link {
+            display: inline-block;
+            margin-top: 20px;
+            padding: 8px 16px;
+            background-color: transparent;
+            border: 1px solid var(--term-cyan);
+            color: var(--term-cyan);
+            text-decoration: none;
+            font-weight: bold;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .btn-link:hover {
+            background-color: var(--term-cyan);
+            color: var(--term-bg);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="terminal-container">
+        <div class="terminal-header"> Administrator: PowerShell - cambriansystems-tui.ps1 </div>
+        <div class="scanline"></div>
+        <div class="terminal-content"><span class="cyan">+-- [ DATA TRANSMUTATION OPERATIONS ] -----------------------+</span>
+<span class="cyan">|</span> <span class="white">--- [ DIVISION 01: CORE DATA TRANSMUTATION ] -------------</span> <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">1</span><span class="white">] TEXT TRANSMUTATION          -&gt; Base64 Encode / Decode Plaintext (RFC-4648)</span><span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">2</span><span class="white">] PHOTO &amp; MEDIA VAULT         -&gt; Image Ingestion, Rebuild &amp; Phosphor Scan</span>  <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">4</span><span class="white">] MULTI-TRANSCODER &amp; SNIFFER  -&gt; Base64URL, Hex/Base16, URI &amp; Auto-Crack</span>   <span class="cyan">|</span>
+<span class="cyan">|</span>                                                                            <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">--- [ DIVISION 02: DOCUMENT &amp; MEDIA CONVERSION ] ---------</span> <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">A</span><span class="white">] IMAGE FORMAT TRANSCODER     -&gt; PNG, JPG, ICO, BMP, GIF, TIFF Resizer</span>     <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">C</span><span class="white">] PDF TRANSMUTATION HUB       -&gt; PDF Data URI Packing, Rebuild &amp; Reader</span>    <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">D</span><span class="white">] MARKDOWN ASSET PACKAGER     -&gt; Inline Local Media to Data URIs/Extract</span>   <span class="cyan">|</span>
+<span class="cyan">|</span>                                                                            <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">--- [ DIVISION 03: SECURITY TOKENS &amp; CRYPTO PROBES ] -----</span> <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">3</span><span class="white">] JWT CORPORATE INSPECTOR     -&gt; Header &amp; Claims Decoder with Lifetime Meter</span><span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">9</span><span class="white">] BASE64 INTEGRITY INSPECTOR  -&gt; RFC-4648 Modulo-4 Checker &amp; SHA-256 Check</span> <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">H</span><span class="white">] MULTI-HASH TELEMETRY GRID   -&gt; MD5, SHA-1, SHA-256, SHA-384, SHA-512</span>     <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">E</span><span class="white">] STEGANOGRAPHY CARRIER       -&gt; Hide &amp; Extract Base64 Payloads in Media</span>   <span class="cyan">|</span>
+<span class="cyan">|</span>                                                                            <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">--- [ DIVISION 04: BINARY, COMPRESSION &amp; QR PIPELINES ] --</span> <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">5</span><span class="white">] GZIP COMPRESSION LAB        -&gt; High-Ratio Compressed Streams (RFC-1952)</span>  <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">6</span><span class="white">] POWERSHELL ENCODED COMMAND  -&gt; Generate &amp; Reverse UTF-16LE -EncodedCommand</span><span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">7</span><span class="white">] NORTON HEX DUMP INSPECTOR   -&gt; Byte Memory Grid with Offset &amp; ASCII Gutter</span><span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">8</span><span class="white">] OFFLINE BATCH HTML VAULT    -&gt; Bulk Directory Scanner &amp; Cyber Gallery</span>    <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">R</span><span class="white">] PHOSPHOR QR GENERATOR       -&gt; Render In-Terminal Dual-Cell QR Code</span>      <span class="cyan">|</span>
+<span class="cyan">|</span>                                                                            <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">--- [ DIVISION 05: TERMINAL ENVIRONMENT &amp; SYSTEM EXIT ] --</span> <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">0</span><span class="white">] TERMINAL ENVIRONMENT        -&gt; CRT Themes, Sound &amp; Line Formatting</span>       <span class="cyan">|</span>
+<span class="cyan">|</span> <span class="white">[</span><span class="cyan">Q</span><span class="white">] TERMINATE WORKSTATION       -&gt; Flush Cache Buffers &amp; Disconnect Session</span>  <span class="cyan">|</span>
+<span class="cyan">+------------------------------------------------------------+</span>
+<div class="bg-cyan">[STATUS: READY // WORKSTATION ONLINE // CAMBRIANSYSTEMS v5.2             ]</div>
+<span class="cyan">&gt;&gt; COMMAND SELECTION [0-9, A, C, D, H, E, R, Q] OR CLICK:</span> <span class="cursor"></span>
+
+<a href="https://github.com/CambrianMinds/cambriansystems-tui" class="btn-link">View on GitHub</a>
+</div>
+    </div>
+</body>
+</html>
